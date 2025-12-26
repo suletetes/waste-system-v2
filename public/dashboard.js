@@ -26,6 +26,7 @@ async function loadDashboard() {
       if (user && user.fullname) {
         document.getElementById("user-name").innerText = user.fullname;
       }
+      document.getElementById("total-reports-count").innerText = `${data.stats.totalReports}`;
       document.getElementById(
         "resolved-incidents-count"
       ).innerText = `${data.stats.resolvedIncidents}`;

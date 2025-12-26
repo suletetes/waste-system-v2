@@ -76,6 +76,7 @@
     </header>
 
     <form
+      id="report-form"
       method="POST"
       class="m-8 max-w-4xl mx-auto"
       enctype="multipart/form-data"
@@ -94,7 +95,7 @@
           <div class="space-y-4">
             <div>
               <label
-                for="waste_type"
+                for="select"
                 class="block text-sm font-medium text-gray-700 mb-2"
                 >Waste Category</label
               >
@@ -110,7 +111,7 @@
             </div>
             <div>
               <label
-                for="location"
+                for="address"
                 class="block text-sm font-medium text-gray-700 mb-2"
                 >Address or location</label
               >
@@ -189,9 +190,9 @@
           Submit Report
         </button>
       </div>
+      <p id="message" class="text-center text-sm mt-4 font-medium h-6"></p>
     </form>
 
-    <script src="report.js">
-    </script>
+    <script src="report.js"></script>
   </body>
 </html>
