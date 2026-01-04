@@ -7,7 +7,7 @@ const reportSchema = new mongoose.Schema(
     description: { type: String },
     photos: { type: [String], default: [] },
     status: { type: String, default: "Pending" },
-    //link to the user who created the report 
+    //link to the user who created the report
     user: {
       type: mongoose.Schema.Types.ObjectId,
       ref: "User",

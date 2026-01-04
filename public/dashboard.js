@@ -1,10 +1,15 @@
 async function loadDashboard() {
   const token = localStorage.getItem("userToken"); // 1. Retrieves your "ID card" from login.
-  const logOutBtn = document.getElementById("logout-button");//logs user out when clicked
   const user = JSON.parse(localStorage.getItem("user")); // Retrieve the saved user object.
+
   if (!token) {
     window.location.href = "login.html"; // 2. No token? Redirect to login.
     return;
+  }
+
+  // 4. Update the Welcome Name from the token data (if saved)
+  if (user && user.fullname) {
+    document.getElementById("user-name").innerText = user.fullname;
   }
 
   try {
@@ -17,16 +22,8 @@ async function loadDashboard() {
 
     const data = await response.json();
 
+    // 5. Update Stat Counters
     if (data.success) {
-      // 4. Update the Welcome Name from the token data (if saved)
-      // Or just use the data returned from the API
-      document.getElementById("user-name").innerText =
-        data.reports[0]?.user?.fullname || "User";
-
-      // 5. Update Stat Counters
-      if (user && user.fullname) {
-        document.getElementById("user-name").innerText = user.fullname;
-      }
       document.getElementById(
         "total-reports-count"
       ).innerText = `${data.stats.totalReports}`;
@@ -39,17 +36,24 @@ async function loadDashboard() {
 
       // 6. Render the Table
       renderTable(data.reports);
-      logOutBtn.addEventListener("click", () => {
-        alert("Are you sure you want to logout?")
-        localStorage.removeItem("userToken");
-        localStorage.removeItem("user");
-        window.location.href = "login.html";
-      });
     }
   } catch (error) {
     console.error("Dashboard error:", error);
   }
 }
+
+// Logout Button Listener
+const logoutBtn = document.getElementById("logout-button");
+if (logoutBtn) {
+  logoutBtn.addEventListener("click", () => {
+    if (confirm("Are you sure you want to logout?")) {
+      localStorage.removeItem("userToken");
+      localStorage.removeItem("user");
+      window.location.href = "login.html";
+    }
+  });
+}
+
 function renderTable(reports) {
   const tableBody = document.getElementById("reports-table-body");
   tableBody.innerHTML = ""; // Clear placeholders
@@ -62,6 +66,8 @@ function renderTable(reports) {
     let badgeClass = "bg-yellow-200 text-yellow-700"; // Default: In Progress
     if (report.status === "Resolved")
       badgeClass = "bg-green-200 text-green-700";
+    if (report.status === "Completed")
+      badgeClass = "bg-green-200 text-green-700"; // Added Completed as valid status
     if (report.status === "Rejected") badgeClass = "bg-red-200 text-red-700";
 
     // 7. Injecting real data into the row

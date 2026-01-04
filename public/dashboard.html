@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <script src="https://cdn.jsdelivr.net/npm/@tailwindcss/browser@4"></script>
     <title>Dashboard</title>
+
     <style>
       @import url("https://fonts.googleapis.com/css2?family=Inter:wght@100..900&display=swap");
       body {
@@ -26,9 +27,11 @@
           class="logo flex items-center gap-2 bg-gray-700 px-3 sm:px-4 py-2 rounded"
         >
           <!-- <img src="../assets/system-logo.png" alt="logo" class="w-8 h-8" /> -->
-          <h2 class="font-bold text-gray-200 text-sm sm:text-base">
-            Waste Watch
-          </h2>
+          <a href="index.html">
+            <h2 class="font-bold text-gray-200 text-sm sm:text-base">
+              Waste Watch
+            </h2>
+          </a>
         </div>
 
         <ul
@@ -42,30 +45,17 @@
             >
           </li>
           <li>
-            <a
-              href="#"
-              class="text-white hover:text-amber-400 transition text-sm sm:text-base"
-              >Profile</a
-            >
-          </li>
-          <li>
-            <a
-              href="#"
-              class="text-white hover:text-amber-400 transition text-sm sm:text-base"
-              >Settings</a
-            >
-          </li>
-          <li>
             <button
-            id="logout-button"
+              id="logout-button"
               class="text-white hover:text-amber-400 transition text-sm sm:text-base"
-              >Logout</button
             >
+              Logout
+            </button>
           </li>
         </ul>
 
         <img
-          src=""
+          src="../assets/avatar-collector.png"
           alt="user_avatar"
           class="w-8 h-8 rounded-full bg-gray-400"
         />
@@ -166,18 +156,16 @@
             </table>
           </div>
 
-          <div class="bg-white rounded-xl shadow p-4 h-[350px]">
+          <div class="bg-white rounded-xl shadow p-4 h-[400px]">
             <h2 class="text-lg font-bold mb-2">Map of My Reports</h2>
             <div
-              class="bg-gray-200 w-full h-[90%] rounded-lg flex items-center justify-center"
-            >
-              (Map goes here)
-            </div>
+              id="map"
+              class="w-full h-[90%] rounded-lg border border-gray-200"
+            ></div>
           </div>
         </div>
       </div>
 
-      <!-- <footer class="bg-red-400">&copy;2025 All rights reserved</footer> -->
     </div>
 
     <!-- Report form modal (loaded dynamically) -->
