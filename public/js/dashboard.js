@@ -66,7 +66,7 @@ function initializeMap(mapData) {
     mapContainer.innerHTML = `
       <div class="flex items-center justify-center h-full bg-gray-50 rounded-lg">
         <div class="text-center text-gray-500">
-          <div class="text-4xl mb-2">📍</div>
+          <div class="text-4xl mb-2">[MAP]</div>
           <p class="text-lg font-medium">No locations to display</p>
           <p class="text-sm">Reports with addresses will appear here once geocoded</p>
         </div>
@@ -177,7 +177,7 @@ function renderTable(reports) {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td colspan="4" class="py-8 px-4 text-center text-gray-500">
-        <div class="text-4xl mb-2">📋</div>
+        <div class="text-4xl mb-2">[EMPTY]</div>
         <p class="text-lg font-medium">No reports yet</p>
         <p class="text-sm">Click "Report New Waste Incident" to get started</p>
       </td>

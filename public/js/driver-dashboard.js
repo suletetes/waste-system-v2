@@ -61,7 +61,7 @@ function renderReportsTable(reports) {
     const row = document.createElement("tr");
     row.innerHTML = `
       <td colspan="7" class="py-8 px-4 text-center text-gray-500">
-        <div class="text-4xl mb-2">📋</div>
+        <div class="text-4xl mb-2">[EMPTY]</div>
         <p class="text-lg font-medium">No assigned reports</p>
         <p class="text-sm">New assignments will appear here</p>
       </td>

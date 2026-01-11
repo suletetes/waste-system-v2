@@ -41,7 +41,10 @@
     "admin:create": "node scripts/createAdmin.js",
     "admin:verify": "node scripts/verifyAdminAccess.js",
     "db:test": "node scripts/test-connection.js",
+    "db:seed": "node scripts/seed.js",
+    "db:clear": "node scripts/seed.js --clear-only",
     "setup": "npm install && npm run db:test",
+    "setup:full": "npm install && npm run db:test && npm run db:seed",
     "lint": "echo 'Linting not configured yet'",
     "clean": "rm -rf node_modules package-lock.json && npm install"
   },

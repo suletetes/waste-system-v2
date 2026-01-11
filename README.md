@@ -78,8 +78,51 @@ A comprehensive waste reporting system that enables citizens to report waste iss
    npm run dev
    ```
 
-7. **Access the Application**
+7. **Seed Database (Optional)**
+   ```bash
+   # Populate with sample data for testing
+   npm run db:seed
+   
+   # Or run complete setup with seeding
+   npm run setup:full
+   ```
+
+8. **Access the Application**
    Open your browser and navigate to `http://localhost:5050`
+
+##  Sample Data & Testing
+
+### Quick Setup with Sample Data
+```bash
+npm run setup:full  # Install + DB test + seed data
+```
+
+### Seeding Commands
+```bash
+npm run db:seed     # Add sample users and reports
+npm run db:clear    # Clear all data
+npm run setup:full  # Complete setup with sample data
+```
+
+### Test Accounts (After Seeding)
+```bash
+# Admin Access
+Email: admin@cleancity.com
+Password: admin123
+
+# Driver Access  
+Email: mike.johnson@example.com
+Password: password123
+
+# Citizen Access
+Email: john.doe@example.com
+Password: password123
+```
+
+The seed script creates:
+- **7 Users** (4 citizens, 2 drivers, 1 admin)
+- **10 Reports** with various statuses and real geocoded addresses
+- **Realistic Scenarios** including assignments, rejections, and admin reports
 
 ##  Project Structure
 
