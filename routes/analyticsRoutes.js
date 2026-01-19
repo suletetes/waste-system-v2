@@ -29,6 +29,7 @@ router.get('/trends', async (req, res) => {
     // Validate required parameters
     if (!startDate || !endDate) {
       return res.status(400).json({
+        success: false,
         error: {
           code: 'INVALID_DATE_RANGE',
           message: 'startDate and endDate are required',
@@ -42,27 +43,41 @@ router.get('/trends', async (req, res) => {
 
     // Check cache first
     const cacheKey = cacheService.generateCacheKey('trends', filters, dateRange);
-    let trendData = await cacheService.getCachedData(cacheKey);
+    let result = await cacheService.getCachedData(cacheKey);
 
-    if (!trendData) {
-      // Generate fresh data
-      trendData = await dataAggregation.aggregateTrendsByCategory(dateRange, filters);
+    if (!result) {
+      // Generate fresh data with quality metrics
+      const trendData = await dataAggregation.aggregateTrendsByCategory(dateRange, filters);
+      const dataQuality = await analyticsEngine.calculateDataQuality(trendData.rawRecords || []);
+      
+      result = {
+        ...trendData,
+        dataQuality
+      };
       
       // Cache the results
-      await cacheService.cacheAnalyticsData(cacheKey, trendData);
+      await cacheService.cacheAnalyticsData(cacheKey, result);
     }
 
     res.json({
       success: true,
-      data: trendData,
+      data: result,
+      dataQuality: result.dataQuality || {
+        totalRecords: 0,
+        validRecords: 0,
+        excludedRecords: 0,
+        qualityScore: 100,
+        exclusionReasons: {}
+      },
       filters: { dateRange, category, status },
-      cached: !!trendData,
+      cached: !!result,
       timestamp: new Date().toISOString()
     });
 
   } catch (error) {
     console.error('[ERROR] Analytics API - /trends:', error.message);
     res.status(500).json({
+      success: false,
       error: {
         code: 'TREND_ANALYSIS_ERROR',
         message: 'Failed to generate trend analysis',
@@ -158,16 +173,30 @@ router.get('/geographic', async (req, res) => {
 
     // Check cache
     const cacheKey = cacheService.generateCacheKey('geographic', { ...filters, bounds: bounds ? 'bounded' : 'all' });
-    let geographicData = await cacheService.getCachedData(cacheKey);
+    let result = await cacheService.getCachedData(cacheKey);
 
-    if (!geographicData) {
-      geographicData = await dataAggregation.aggregateByLocation(bounds, filters);
-      await cacheService.cacheAnalyticsData(cacheKey, geographicData);
+    if (!result) {
+      const geographicData = await dataAggregation.aggregateByLocation(bounds, filters);
+      const dataQuality = await analyticsEngine.calculateDataQuality(geographicData.rawRecords || []);
+      
+      result = {
+        ...geographicData,
+        dataQuality
+      };
+      
+      await cacheService.cacheAnalyticsData(cacheKey, result);
     }
 
     res.json({
       success: true,
-      data: geographicData,
+      data: result,
+      dataQuality: result.dataQuality || {
+        totalRecords: 0,
+        validRecords: 0,
+        excludedRecords: 0,
+        qualityScore: 100,
+        exclusionReasons: {}
+      },
       filters: { bounds, category, dateRange: filters.dateRange },
       timestamp: new Date().toISOString()
     });
@@ -175,6 +204,7 @@ router.get('/geographic', async (req, res) => {
   } catch (error) {
     console.error('[ERROR] Analytics API - /geographic:', error.message);
     res.status(500).json({
+      success: false,
       error: {
         code: 'GEOGRAPHIC_ANALYSIS_ERROR',
         message: 'Failed to generate geographic analysis',
@@ -618,30 +648,71 @@ router.get('/health', async (req, res) => {
   try {
     const health = {
       analytics: true,
-      database: false,
+      database: 'unknown',
       cache: cacheService.isAvailable(),
-      timestamp: new Date().toISOString()
+      timestamp: new Date().toISOString(),
+      systemHealth: {
+        database: 'connected',
+        cache: 'available',
+        dataFreshness: 0
+      }
     };
 
-    // Test database connection
+    // Test database connection with timeout
     try {
-      await Report.countDocuments().limit(1);
-      health.database = true;
+      const startTime = Date.now();
+      await Promise.race([
+        Report.countDocuments().limit(1),
+        new Promise((_, reject) => 
+          setTimeout(() => reject(new Error('Database timeout')), 5000)
+        )
+      ]);
+      
+      const responseTime = Date.now() - startTime;
+      health.database = 'connected';
+      health.systemHealth.database = responseTime > 2000 ? 'slow' : 'connected';
+      health.systemHealth.responseTime = responseTime;
+      
     } catch (dbError) {
-      health.database = false;
+      health.database = 'disconnected';
+      health.systemHealth.database = 'disconnected';
       health.databaseError = dbError.message;
     }
 
-    const status = health.analytics && health.database ? 200 : 503;
+    // Check cache availability
+    try {
+      if (!cacheService.isAvailable()) {
+        health.systemHealth.cache = 'unavailable';
+      }
+    } catch (cacheError) {
+      health.systemHealth.cache = 'unavailable';
+      health.cacheError = cacheError.message;
+    }
+
+    // Check data freshness (time since last report)
+    try {
+      const latestReport = await Report.findOne().sort({ createdAt: -1 }).select('createdAt');
+      if (latestReport) {
+        const minutesSinceLatest = Math.floor((Date.now() - latestReport.createdAt.getTime()) / (1000 * 60));
+        health.systemHealth.dataFreshness = minutesSinceLatest;
+      }
+    } catch (freshnessError) {
+      console.warn('[WARN] Analytics Health - Data freshness check failed:', freshnessError.message);
+    }
+
+    // Determine overall health status
+    const isHealthy = health.database === 'connected' && health.cache;
+    const status = isHealthy ? 200 : 503;
     
     res.status(status).json({
-      success: status === 200,
+      success: isHealthy,
       data: health
     });
 
   } catch (error) {
     console.error('[ERROR] Analytics API - /health:', error.message);
     res.status(500).json({
+      success: false,
       error: {
         code: 'HEALTH_CHECK_ERROR',
         message: 'Health check failed',

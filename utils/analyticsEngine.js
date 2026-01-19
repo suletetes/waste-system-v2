@@ -158,10 +158,10 @@ class AnalyticsEngine {
   }
 
   /**
-   * Calculate driver performance metrics
+   * Calculate comprehensive driver performance metrics
    * @param {String} driverId - Driver ID (optional, if null returns all drivers)
    * @param {Object} dateRange - Date range for analysis
-   * @returns {Promise<Object>} Driver performance metrics
+   * @returns {Promise<Object>} Enhanced driver performance metrics
    */
   async calculateDriverMetrics(driverId = null, dateRange) {
     try {
@@ -191,7 +191,10 @@ class AnalyticsEngine {
             inProgressReports: {
               $sum: { $cond: [{ $eq: ["$status", "In Progress"] }, 1, 0] }
             },
-            // Calculate average resolution time for completed reports
+            pendingReports: {
+              $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] }
+            },
+            // Calculate resolution times for completed reports
             completedReportTimes: {
               $push: {
                 $cond: [
@@ -200,57 +203,45 @@ class AnalyticsEngine {
                   null
                 ]
               }
-            }
-          }
-        },
-        {
-          $lookup: {
-            from: "users",
-            localField: "_id",
-            foreignField: "_id",
-            as: "driverInfo"
+            },
+            // Track category distribution
+            recyclableReports: {
+              $sum: { $cond: [{ $eq: ["$category", "recyclable"] }, 1, 0] }
+            },
+            illegalDumpingReports: {
+              $sum: { $cond: [{ $eq: ["$category", "illegal_dumping"] }, 1, 0] }
+            },
+            hazardousWasteReports: {
+              $sum: { $cond: [{ $eq: ["$category", "hazardous_waste"] }, 1, 0] }
+            },
+            // Track assignment dates for workload analysis
+            assignmentDates: { $push: "$assignedAt" },
+            // Track report creation dates for trend analysis
+            reportDates: { $push: "$createdAt" }
           }
         }
       ]);
 
-      // Process driver statistics
+      // Process enhanced driver statistics
       const processedStats = await Promise.all(driverStats.map(async (stat) => {
-        const completionRate = stat.assignedReports > 0 
-          ? Math.round((stat.completedReports / stat.assignedReports) * 100)
-          : 0;
-        
-        const rejectionRate = stat.assignedReports > 0
-          ? Math.round((stat.rejectedReports / stat.assignedReports) * 100)
-          : 0;
-
-        // Calculate average resolution time (in hours)
-        const validTimes = stat.completedReportTimes.filter(time => time !== null);
-        const averageResolutionTime = validTimes.length > 0
-          ? Math.round((validTimes.reduce((sum, time) => sum + time, 0) / validTimes.length) / (1000 * 60 * 60))
-          : 0;
-
-        return {
-          driverId: stat._id,
-          // Privacy protection - only include performance metrics
-          assignedReports: stat.assignedReports,
-          completedReports: stat.completedReports,
-          rejectedReports: stat.rejectedReports,
-          inProgressReports: stat.inProgressReports,
-          completionRate,
-          rejectionRate,
-          averageResolutionTime, // in hours
-          period: { startDate, endDate }
-        };
+        return this.processDriverPerformanceData(stat, { startDate, endDate });
       }));
+
+      // Calculate system-wide performance benchmarks
+      const benchmarks = this.calculatePerformanceBenchmarks(processedStats);
 
       return {
         driverCount: processedStats.length,
         metrics: processedStats,
+        benchmarks,
         summary: {
           totalAssigned: processedStats.reduce((sum, stat) => sum + stat.assignedReports, 0),
           totalCompleted: processedStats.reduce((sum, stat) => sum + stat.completedReports, 0),
           averageCompletionRate: processedStats.length > 0
             ? Math.round(processedStats.reduce((sum, stat) => sum + stat.completionRate, 0) / processedStats.length)
+            : 0,
+          averageResolutionTime: processedStats.length > 0
+            ? Math.round(processedStats.reduce((sum, stat) => sum + stat.averageResolutionTime, 0) / processedStats.length)
             : 0
         }
       };
@@ -258,6 +249,309 @@ class AnalyticsEngine {
     } catch (error) {
       console.error('[ERROR] Analytics Engine - calculateDriverMetrics:', error.message);
       throw new Error(`Driver metrics calculation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Process individual driver performance data with enhanced calculations
+   * @param {Object} stat - Raw driver statistics from aggregation
+   * @param {Object} period - Analysis period
+   * @returns {Object} Processed driver performance metrics
+   */
+  processDriverPerformanceData(stat, period) {
+    try {
+      // Basic completion and rejection rates
+      const completionRate = stat.assignedReports > 0 
+        ? Math.round((stat.completedReports / stat.assignedReports) * 100)
+        : 0;
+      
+      const rejectionRate = stat.assignedReports > 0
+        ? Math.round((stat.rejectedReports / stat.assignedReports) * 100)
+        : 0;
+
+      // Calculate resolution time statistics
+      const validTimes = stat.completedReportTimes.filter(time => time !== null && time > 0);
+      const resolutionTimeStats = this.calculateResolutionTimeStats(validTimes);
+
+      // Calculate workload distribution
+      const workloadStats = this.calculateWorkloadDistribution(stat);
+
+      // Calculate efficiency metrics
+      const efficiencyMetrics = this.calculateEfficiencyMetrics(stat, resolutionTimeStats);
+
+      // Privacy protection - return only performance metrics, no personal information
+      return {
+        driverId: stat._id,
+        // Core performance metrics
+        assignedReports: stat.assignedReports,
+        completedReports: stat.completedReports,
+        rejectedReports: stat.rejectedReports,
+        inProgressReports: stat.inProgressReports,
+        pendingReports: stat.pendingReports,
+        
+        // Performance rates
+        completionRate,
+        rejectionRate,
+        inProgressRate: stat.assignedReports > 0 
+          ? Math.round((stat.inProgressReports / stat.assignedReports) * 100)
+          : 0,
+
+        // Resolution time analytics
+        averageResolutionTime: resolutionTimeStats.average,
+        medianResolutionTime: resolutionTimeStats.median,
+        minResolutionTime: resolutionTimeStats.min,
+        maxResolutionTime: resolutionTimeStats.max,
+        resolutionTimeVariance: resolutionTimeStats.variance,
+
+        // Workload distribution
+        categoryDistribution: workloadStats.categoryDistribution,
+        workloadBalance: workloadStats.balance,
+
+        // Efficiency metrics
+        reportsPerDay: efficiencyMetrics.reportsPerDay,
+        productivityScore: efficiencyMetrics.productivityScore,
+        consistencyScore: efficiencyMetrics.consistencyScore,
+
+        // Assignment tracking
+        assignmentAccuracy: this.calculateAssignmentAccuracy(stat),
+        
+        // Analysis period
+        period
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - processDriverPerformanceData:', error.message);
+      // Return basic metrics on error to maintain system stability
+      return {
+        driverId: stat._id,
+        assignedReports: stat.assignedReports || 0,
+        completedReports: stat.completedReports || 0,
+        rejectedReports: stat.rejectedReports || 0,
+        completionRate: 0,
+        rejectionRate: 0,
+        averageResolutionTime: 0,
+        period,
+        error: 'Processing failed - basic metrics only'
+      };
+    }
+  }
+
+  /**
+   * Calculate detailed resolution time statistics
+   * @param {Array} resolutionTimes - Array of resolution times in milliseconds
+   * @returns {Object} Resolution time statistics
+   */
+  calculateResolutionTimeStats(resolutionTimes) {
+    try {
+      if (!resolutionTimes || resolutionTimes.length === 0) {
+        return {
+          average: 0,
+          median: 0,
+          min: 0,
+          max: 0,
+          variance: 0,
+          count: 0
+        };
+      }
+
+      // Convert to hours and sort
+      const timesInHours = resolutionTimes
+        .map(time => time / (1000 * 60 * 60))
+        .sort((a, b) => a - b);
+
+      const count = timesInHours.length;
+      const sum = timesInHours.reduce((acc, time) => acc + time, 0);
+      const average = sum / count;
+
+      // Calculate median
+      const median = count % 2 === 0
+        ? (timesInHours[count / 2 - 1] + timesInHours[count / 2]) / 2
+        : timesInHours[Math.floor(count / 2)];
+
+      // Calculate variance
+      const variance = count > 1
+        ? timesInHours.reduce((acc, time) => acc + Math.pow(time - average, 2), 0) / (count - 1)
+        : 0;
+
+      return {
+        average: Math.round(average * 100) / 100,
+        median: Math.round(median * 100) / 100,
+        min: Math.round(timesInHours[0] * 100) / 100,
+        max: Math.round(timesInHours[count - 1] * 100) / 100,
+        variance: Math.round(variance * 100) / 100,
+        count
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateResolutionTimeStats:', error.message);
+      return { average: 0, median: 0, min: 0, max: 0, variance: 0, count: 0 };
+    }
+  }
+
+  /**
+   * Calculate workload distribution across categories
+   * @param {Object} stat - Driver statistics
+   * @returns {Object} Workload distribution metrics
+   */
+  calculateWorkloadDistribution(stat) {
+    try {
+      const totalReports = stat.assignedReports || 0;
+      
+      if (totalReports === 0) {
+        return {
+          categoryDistribution: {
+            recyclable: 0,
+            illegal_dumping: 0,
+            hazardous_waste: 0
+          },
+          balance: 100 // Perfect balance when no reports
+        };
+      }
+
+      const categoryDistribution = {
+        recyclable: Math.round((stat.recyclableReports / totalReports) * 100),
+        illegal_dumping: Math.round((stat.illegalDumpingReports / totalReports) * 100),
+        hazardous_waste: Math.round((stat.hazardousWasteReports / totalReports) * 100)
+      };
+
+      // Calculate workload balance (how evenly distributed across categories)
+      const expectedPercentage = 100 / 3; // 33.33% for perfect balance
+      const deviations = Object.values(categoryDistribution)
+        .map(percentage => Math.abs(percentage - expectedPercentage));
+      const averageDeviation = deviations.reduce((sum, dev) => sum + dev, 0) / deviations.length;
+      const balance = Math.max(0, Math.round(100 - (averageDeviation * 3))); // Scale to 0-100
+
+      return {
+        categoryDistribution,
+        balance
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateWorkloadDistribution:', error.message);
+      return {
+        categoryDistribution: { recyclable: 0, illegal_dumping: 0, hazardous_waste: 0 },
+        balance: 0
+      };
+    }
+  }
+
+  /**
+   * Calculate efficiency metrics for driver performance
+   * @param {Object} stat - Driver statistics
+   * @param {Object} resolutionTimeStats - Resolution time statistics
+   * @returns {Object} Efficiency metrics
+   */
+  calculateEfficiencyMetrics(stat, resolutionTimeStats) {
+    try {
+      const totalReports = stat.assignedReports || 0;
+      const completedReports = stat.completedReports || 0;
+      
+      // Calculate reports per day (assuming 30-day period for estimation)
+      const reportsPerDay = Math.round((totalReports / 30) * 100) / 100;
+
+      // Calculate productivity score (0-100) based on completion rate and volume
+      const completionRate = totalReports > 0 ? (completedReports / totalReports) * 100 : 0;
+      const volumeScore = Math.min(100, (totalReports / 10) * 100); // 10 reports = 100% volume score
+      const productivityScore = Math.round((completionRate * 0.7) + (volumeScore * 0.3));
+
+      // Calculate consistency score based on resolution time variance
+      const consistencyScore = resolutionTimeStats.variance > 0
+        ? Math.max(0, Math.round(100 - (resolutionTimeStats.variance / 10))) // Lower variance = higher consistency
+        : 100;
+
+      return {
+        reportsPerDay,
+        productivityScore: Math.min(100, productivityScore),
+        consistencyScore: Math.min(100, consistencyScore)
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateEfficiencyMetrics:', error.message);
+      return {
+        reportsPerDay: 0,
+        productivityScore: 0,
+        consistencyScore: 0
+      };
+    }
+  }
+
+  /**
+   * Calculate assignment accuracy metrics
+   * @param {Object} stat - Driver statistics
+   * @returns {Number} Assignment accuracy percentage
+   */
+  calculateAssignmentAccuracy(stat) {
+    try {
+      const totalAssigned = stat.assignedReports || 0;
+      const completed = stat.completedReports || 0;
+      const inProgress = stat.inProgressReports || 0;
+      
+      if (totalAssigned === 0) return 100;
+
+      // Assignment accuracy = (completed + in_progress) / total_assigned
+      // This measures how many assignments result in active work vs rejection
+      const activeReports = completed + inProgress;
+      return Math.round((activeReports / totalAssigned) * 100);
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateAssignmentAccuracy:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculate system-wide performance benchmarks
+   * @param {Array} driverStats - Array of processed driver statistics
+   * @returns {Object} Performance benchmarks
+   */
+  calculatePerformanceBenchmarks(driverStats) {
+    try {
+      if (!driverStats || driverStats.length === 0) {
+        return {
+          completionRate: { average: 0, median: 0, top25: 0 },
+          resolutionTime: { average: 0, median: 0, best25: 0 },
+          productivity: { average: 0, median: 0, top25: 0 },
+          consistency: { average: 0, median: 0, top25: 0 }
+        };
+      }
+
+      // Calculate benchmarks for each metric
+      const completionRates = driverStats.map(d => d.completionRate).sort((a, b) => b - a);
+      const resolutionTimes = driverStats.map(d => d.averageResolutionTime).filter(t => t > 0).sort((a, b) => a - b);
+      const productivityScores = driverStats.map(d => d.productivityScore).sort((a, b) => b - a);
+      const consistencyScores = driverStats.map(d => d.consistencyScore).sort((a, b) => b - a);
+
+      return {
+        completionRate: {
+          average: this.calculateAverage(completionRates),
+          median: this.calculateMedian(completionRates),
+          top25: this.calculatePercentile(completionRates, 75)
+        },
+        resolutionTime: {
+          average: this.calculateAverage(resolutionTimes),
+          median: this.calculateMedian(resolutionTimes),
+          best25: this.calculatePercentile(resolutionTimes, 25) // Lower is better for resolution time
+        },
+        productivity: {
+          average: this.calculateAverage(productivityScores),
+          median: this.calculateMedian(productivityScores),
+          top25: this.calculatePercentile(productivityScores, 75)
+        },
+        consistency: {
+          average: this.calculateAverage(consistencyScores),
+          median: this.calculateMedian(consistencyScores),
+          top25: this.calculatePercentile(consistencyScores, 75)
+        }
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculatePerformanceBenchmarks:', error.message);
+      return {
+        completionRate: { average: 0, median: 0, top25: 0 },
+        resolutionTime: { average: 0, median: 0, best25: 0 },
+        productivity: { average: 0, median: 0, top25: 0 },
+        consistency: { average: 0, median: 0, top25: 0 }
+      };
     }
   }
 
@@ -347,6 +641,114 @@ class AnalyticsEngine {
   }
 
   /**
+   * Calculate data quality metrics for a dataset
+   * @param {Array} reports - Array of reports to analyze
+   * @returns {Object} Data quality metrics
+   */
+  async calculateDataQuality(reports) {
+    try {
+      if (!reports || !Array.isArray(reports)) {
+        return {
+          totalRecords: 0,
+          validRecords: 0,
+          excludedRecords: 0,
+          qualityScore: 100,
+          exclusionReasons: {}
+        };
+      }
+
+      const totalRecords = reports.length;
+      let validRecords = 0;
+      const exclusionReasons = {
+        invalidDates: 0,
+        invalidCoordinates: 0,
+        missingData: 0,
+        duplicates: 0,
+        invalidCategory: 0,
+        invalidStatus: 0
+      };
+
+      const seenIds = new Set();
+
+      for (const report of reports) {
+        let isValid = true;
+        
+        // Check for duplicates
+        if (report._id && seenIds.has(report._id.toString())) {
+          exclusionReasons.duplicates++;
+          isValid = false;
+          continue;
+        }
+        if (report._id) {
+          seenIds.add(report._id.toString());
+        }
+
+        // Check required fields
+        if (!report._id || !report.createdAt || !report.category || !report.status) {
+          exclusionReasons.missingData++;
+          isValid = false;
+        }
+
+        // Validate dates
+        if (report.createdAt) {
+          const createdAt = new Date(report.createdAt);
+          if (isNaN(createdAt.getTime())) {
+            exclusionReasons.invalidDates++;
+            isValid = false;
+          }
+        }
+
+        // Validate coordinates (if present)
+        if (report.latitude !== undefined || report.longitude !== undefined) {
+          if (!this.validateCoordinates(report.latitude, report.longitude)) {
+            exclusionReasons.invalidCoordinates++;
+            isValid = false;
+          }
+        }
+
+        // Validate category
+        if (report.category && !this.validCategories.includes(report.category)) {
+          exclusionReasons.invalidCategory++;
+          isValid = false;
+        }
+
+        // Validate status
+        if (report.status && !this.validStatuses.includes(report.status)) {
+          exclusionReasons.invalidStatus++;
+          isValid = false;
+        }
+
+        if (isValid) {
+          validRecords++;
+        }
+      }
+
+      const excludedRecords = totalRecords - validRecords;
+      const qualityScore = totalRecords > 0 ? Math.round((validRecords / totalRecords) * 100) : 100;
+
+      return {
+        totalRecords,
+        validRecords,
+        excludedRecords,
+        qualityScore,
+        exclusionReasons
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateDataQuality:', error.message);
+      return {
+        totalRecords: 0,
+        validRecords: 0,
+        excludedRecords: 0,
+        qualityScore: 0,
+        exclusionReasons: {
+          processingError: 1
+        }
+      };
+    }
+  }
+
+  /**
    * Exclude invalid records from dataset
    * @param {Array} reports - Array of reports to filter
    * @returns {Object} { validReports, excludedCount, dataQualityScore }
@@ -378,7 +780,631 @@ class AnalyticsEngine {
     }
   }
 
-  // Helper methods
+  /**
+   * Calculate average of an array of numbers
+   * @param {Array} values - Array of numeric values
+   * @returns {Number} Average value
+   */
+  calculateAverage(values) {
+    if (!values || values.length === 0) return 0;
+    const sum = values.reduce((acc, val) => acc + val, 0);
+    return Math.round((sum / values.length) * 100) / 100;
+  }
+
+  /**
+   * Calculate median of an array of numbers
+   * @param {Array} values - Sorted array of numeric values
+   * @returns {Number} Median value
+   */
+  calculateMedian(values) {
+    if (!values || values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const middle = Math.floor(sorted.length / 2);
+    
+    if (sorted.length % 2 === 0) {
+      return Math.round(((sorted[middle - 1] + sorted[middle]) / 2) * 100) / 100;
+    } else {
+      return sorted[middle];
+    }
+  }
+
+  /**
+   * Calculate percentile of an array of numbers
+   * @param {Array} values - Sorted array of numeric values
+   * @param {Number} percentile - Percentile to calculate (0-100)
+   * @returns {Number} Percentile value
+   */
+  calculatePercentile(values, percentile) {
+    if (!values || values.length === 0) return 0;
+    const sorted = [...values].sort((a, b) => a - b);
+    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+    return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
+  }
+
+  /**
+   * Get driver performance ranking and comparison
+   * @param {String} driverId - Driver ID to rank
+   * @param {Object} dateRange - Date range for analysis
+   * @returns {Promise<Object>} Driver ranking and peer comparison
+   */
+  async getDriverPerformanceRanking(driverId, dateRange) {
+    try {
+      // Get all driver metrics for comparison
+      const allDriverMetrics = await this.calculateDriverMetrics(null, dateRange);
+      const targetDriver = allDriverMetrics.metrics.find(d => d.driverId.toString() === driverId.toString());
+      
+      if (!targetDriver) {
+        throw new Error('Driver not found in performance data');
+      }
+
+      // Calculate rankings for different metrics
+      const rankings = this.calculateDriverRankings(targetDriver, allDriverMetrics.metrics);
+      
+      // Generate peer comparison
+      const peerComparison = this.generatePeerComparison(targetDriver, allDriverMetrics.benchmarks);
+
+      return {
+        driverId,
+        totalDrivers: allDriverMetrics.driverCount,
+        rankings,
+        peerComparison,
+        performanceMetrics: targetDriver,
+        benchmarks: allDriverMetrics.benchmarks
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - getDriverPerformanceRanking:', error.message);
+      throw new Error(`Driver ranking calculation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calculate driver rankings across different performance metrics
+   * @param {Object} targetDriver - Driver to rank
+   * @param {Array} allDrivers - All driver metrics for comparison
+   * @returns {Object} Rankings across different metrics
+   */
+  calculateDriverRankings(targetDriver, allDrivers) {
+    try {
+      const rankings = {};
+      
+      // Completion rate ranking (higher is better)
+      const completionRates = allDrivers.map(d => d.completionRate).sort((a, b) => b - a);
+      rankings.completionRate = {
+        rank: completionRates.indexOf(targetDriver.completionRate) + 1,
+        percentile: Math.round((1 - (completionRates.indexOf(targetDriver.completionRate) / completionRates.length)) * 100)
+      };
+
+      // Resolution time ranking (lower is better)
+      const resolutionTimes = allDrivers
+        .filter(d => d.averageResolutionTime > 0)
+        .map(d => d.averageResolutionTime)
+        .sort((a, b) => a - b);
+      const resolutionTimeRank = resolutionTimes.indexOf(targetDriver.averageResolutionTime) + 1;
+      rankings.resolutionTime = {
+        rank: resolutionTimeRank,
+        percentile: Math.round((1 - (resolutionTimeRank - 1) / resolutionTimes.length) * 100)
+      };
+
+      // Productivity score ranking (higher is better)
+      const productivityScores = allDrivers.map(d => d.productivityScore).sort((a, b) => b - a);
+      rankings.productivity = {
+        rank: productivityScores.indexOf(targetDriver.productivityScore) + 1,
+        percentile: Math.round((1 - (productivityScores.indexOf(targetDriver.productivityScore) / productivityScores.length)) * 100)
+      };
+
+      // Consistency score ranking (higher is better)
+      const consistencyScores = allDrivers.map(d => d.consistencyScore).sort((a, b) => b - a);
+      rankings.consistency = {
+        rank: consistencyScores.indexOf(targetDriver.consistencyScore) + 1,
+        percentile: Math.round((1 - (consistencyScores.indexOf(targetDriver.consistencyScore) / consistencyScores.length)) * 100)
+      };
+
+      return rankings;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateDriverRankings:', error.message);
+      return {
+        completionRate: { rank: 0, percentile: 0 },
+        resolutionTime: { rank: 0, percentile: 0 },
+        productivity: { rank: 0, percentile: 0 },
+        consistency: { rank: 0, percentile: 0 }
+      };
+    }
+  }
+
+  /**
+   * Generate peer comparison analysis
+   * @param {Object} targetDriver - Driver to compare
+   * @param {Object} benchmarks - System benchmarks
+   * @returns {Object} Peer comparison analysis
+   */
+  generatePeerComparison(targetDriver, benchmarks) {
+    try {
+      const comparison = {};
+
+      // Compare against system averages
+      comparison.vsSystemAverage = {
+        completionRate: this.calculatePerformanceGap(targetDriver.completionRate, benchmarks.completionRate.average),
+        resolutionTime: this.calculatePerformanceGap(benchmarks.resolutionTime.average, targetDriver.averageResolutionTime), // Inverted for resolution time
+        productivity: this.calculatePerformanceGap(targetDriver.productivityScore, benchmarks.productivity.average),
+        consistency: this.calculatePerformanceGap(targetDriver.consistencyScore, benchmarks.consistency.average)
+      };
+
+      // Compare against top 25% performers
+      comparison.vsTop25 = {
+        completionRate: this.calculatePerformanceGap(targetDriver.completionRate, benchmarks.completionRate.top25),
+        resolutionTime: this.calculatePerformanceGap(benchmarks.resolutionTime.best25, targetDriver.averageResolutionTime),
+        productivity: this.calculatePerformanceGap(targetDriver.productivityScore, benchmarks.productivity.top25),
+        consistency: this.calculatePerformanceGap(targetDriver.consistencyScore, benchmarks.consistency.top25)
+      };
+
+      // Generate performance insights
+      comparison.insights = this.generatePerformanceInsights(targetDriver, benchmarks);
+
+      return comparison;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - generatePeerComparison:', error.message);
+      return {
+        vsSystemAverage: {},
+        vsTop25: {},
+        insights: []
+      };
+    }
+  }
+
+  /**
+   * Calculate performance gap between actual and benchmark values
+   * @param {Number} actual - Actual performance value
+   * @param {Number} benchmark - Benchmark value
+   * @returns {Object} Performance gap analysis
+   */
+  calculatePerformanceGap(actual, benchmark) {
+    if (!actual || !benchmark) {
+      return { gap: 0, percentage: 0, status: 'unknown' };
+    }
+
+    const gap = actual - benchmark;
+    const percentage = benchmark !== 0 ? Math.round((gap / benchmark) * 100) : 0;
+    
+    let status = 'equal';
+    if (gap > 0) status = 'above';
+    if (gap < 0) status = 'below';
+
+    return {
+      gap: Math.round(gap * 100) / 100,
+      percentage,
+      status
+    };
+  }
+
+  /**
+   * Generate performance insights and recommendations
+   * @param {Object} driver - Driver performance data
+   * @param {Object} benchmarks - System benchmarks
+   * @returns {Array} Array of performance insights
+   */
+  generatePerformanceInsights(driver, benchmarks) {
+    const insights = [];
+
+    try {
+      // Completion rate insights
+      if (driver.completionRate < benchmarks.completionRate.average) {
+        insights.push({
+          type: 'improvement',
+          metric: 'completion_rate',
+          message: `Completion rate is ${Math.round(benchmarks.completionRate.average - driver.completionRate)}% below system average`,
+          priority: 'high'
+        });
+      } else if (driver.completionRate >= benchmarks.completionRate.top25) {
+        insights.push({
+          type: 'strength',
+          metric: 'completion_rate',
+          message: 'Completion rate is in the top 25% of all drivers',
+          priority: 'positive'
+        });
+      }
+
+      // Resolution time insights
+      if (driver.averageResolutionTime > benchmarks.resolutionTime.average && driver.averageResolutionTime > 0) {
+        insights.push({
+          type: 'improvement',
+          metric: 'resolution_time',
+          message: `Resolution time is ${Math.round(driver.averageResolutionTime - benchmarks.resolutionTime.average)} hours above average`,
+          priority: 'medium'
+        });
+      } else if (driver.averageResolutionTime <= benchmarks.resolutionTime.best25 && driver.averageResolutionTime > 0) {
+        insights.push({
+          type: 'strength',
+          metric: 'resolution_time',
+          message: 'Resolution time is in the fastest 25% of all drivers',
+          priority: 'positive'
+        });
+      }
+
+      // Productivity insights
+      if (driver.productivityScore < benchmarks.productivity.average) {
+        insights.push({
+          type: 'improvement',
+          metric: 'productivity',
+          message: `Productivity score is ${Math.round(benchmarks.productivity.average - driver.productivityScore)} points below average`,
+          priority: 'medium'
+        });
+      }
+
+      // Consistency insights
+      if (driver.consistencyScore < benchmarks.consistency.average) {
+        insights.push({
+          type: 'improvement',
+          metric: 'consistency',
+          message: 'Performance consistency could be improved for more predictable results',
+          priority: 'low'
+        });
+      }
+
+      // Workload balance insights
+      if (driver.workloadBalance < 70) {
+        insights.push({
+          type: 'observation',
+          metric: 'workload_balance',
+          message: 'Workload is concentrated in specific incident categories',
+          priority: 'info'
+        });
+      }
+
+      return insights;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - generatePerformanceInsights:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get detailed driver assignment tracking and accuracy metrics
+   * @param {String} driverId - Driver ID (optional)
+   * @param {Object} dateRange - Date range for analysis
+   * @returns {Promise<Object>} Assignment tracking metrics
+   */
+  async getDriverAssignmentTracking(driverId = null, dateRange) {
+    try {
+      const { startDate, endDate } = this.validateDateRange(dateRange);
+      
+      const matchCriteria = {
+        assignedDriver: { $exists: true, $ne: null },
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      if (driverId) {
+        matchCriteria.assignedDriver = driverId;
+      }
+
+      // Get detailed assignment data
+      const assignmentData = await Report.aggregate([
+        { $match: matchCriteria },
+        {
+          $group: {
+            _id: "$assignedDriver",
+            totalAssignments: { $sum: 1 },
+            // Track assignment outcomes
+            completedAssignments: {
+              $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] }
+            },
+            rejectedAssignments: {
+              $sum: { $cond: [{ $eq: ["$status", "Rejected"] }, 1, 0] }
+            },
+            inProgressAssignments: {
+              $sum: { $cond: [{ $eq: ["$status", "In Progress"] }, 1, 0] }
+            },
+            pendingAssignments: {
+              $sum: { $cond: [{ $eq: ["$status", "Pending"] }, 1, 0] }
+            },
+            // Track assignment timing
+            assignmentTimes: { $push: "$assignedAt" },
+            creationTimes: { $push: "$createdAt" },
+            // Track category accuracy
+            categoryAccuracy: {
+              $push: {
+                category: "$category",
+                status: "$status",
+                assignedAt: "$assignedAt"
+              }
+            }
+          }
+        }
+      ]);
+
+      // Process assignment tracking data
+      const processedTracking = assignmentData.map(data => {
+        return this.processAssignmentTrackingData(data, { startDate, endDate });
+      });
+
+      // Calculate system-wide assignment metrics
+      const systemMetrics = this.calculateSystemAssignmentMetrics(processedTracking);
+
+      return {
+        driverCount: processedTracking.length,
+        assignmentTracking: processedTracking,
+        systemMetrics,
+        period: { startDate, endDate }
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - getDriverAssignmentTracking:', error.message);
+      throw new Error(`Assignment tracking calculation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Process individual driver assignment tracking data
+   * @param {Object} data - Raw assignment data from aggregation
+   * @param {Object} period - Analysis period
+   * @returns {Object} Processed assignment tracking metrics
+   */
+  processAssignmentTrackingData(data, period) {
+    try {
+      const totalAssignments = data.totalAssignments || 0;
+      
+      // Calculate assignment accuracy (non-rejected assignments)
+      const activeAssignments = data.completedAssignments + data.inProgressAssignments;
+      const assignmentAccuracy = totalAssignments > 0 
+        ? Math.round((activeAssignments / totalAssignments) * 100)
+        : 100;
+
+      // Calculate assignment completion rate
+      const completionRate = totalAssignments > 0
+        ? Math.round((data.completedAssignments / totalAssignments) * 100)
+        : 0;
+
+      // Calculate assignment response time (time from creation to assignment)
+      const responseTimeStats = this.calculateAssignmentResponseTime(
+        data.creationTimes, 
+        data.assignmentTimes
+      );
+
+      // Analyze category-specific performance
+      const categoryPerformance = this.analyzeCategoryAssignmentPerformance(data.categoryAccuracy);
+
+      // Privacy protection - return only performance metrics
+      return {
+        driverId: data._id,
+        totalAssignments,
+        completedAssignments: data.completedAssignments,
+        rejectedAssignments: data.rejectedAssignments,
+        inProgressAssignments: data.inProgressAssignments,
+        pendingAssignments: data.pendingAssignments,
+        
+        // Assignment accuracy metrics
+        assignmentAccuracy,
+        completionRate,
+        rejectionRate: totalAssignments > 0 
+          ? Math.round((data.rejectedAssignments / totalAssignments) * 100)
+          : 0,
+        
+        // Response time metrics
+        averageResponseTime: responseTimeStats.average,
+        medianResponseTime: responseTimeStats.median,
+        
+        // Category performance
+        categoryPerformance,
+        
+        // Assignment efficiency score (composite metric)
+        efficiencyScore: this.calculateAssignmentEfficiencyScore({
+          accuracy: assignmentAccuracy,
+          completion: completionRate,
+          responseTime: responseTimeStats.average
+        }),
+        
+        period
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - processAssignmentTrackingData:', error.message);
+      return {
+        driverId: data._id,
+        totalAssignments: data.totalAssignments || 0,
+        assignmentAccuracy: 0,
+        completionRate: 0,
+        efficiencyScore: 0,
+        period,
+        error: 'Processing failed'
+      };
+    }
+  }
+
+  /**
+   * Calculate assignment response time statistics
+   * @param {Array} creationTimes - Report creation timestamps
+   * @param {Array} assignmentTimes - Assignment timestamps
+   * @returns {Object} Response time statistics
+   */
+  calculateAssignmentResponseTime(creationTimes, assignmentTimes) {
+    try {
+      if (!creationTimes || !assignmentTimes || creationTimes.length !== assignmentTimes.length) {
+        return { average: 0, median: 0, count: 0 };
+      }
+
+      const responseTimes = [];
+      for (let i = 0; i < creationTimes.length; i++) {
+        if (creationTimes[i] && assignmentTimes[i]) {
+          const responseTime = new Date(assignmentTimes[i]) - new Date(creationTimes[i]);
+          if (responseTime >= 0) {
+            responseTimes.push(responseTime / (1000 * 60 * 60)); // Convert to hours
+          }
+        }
+      }
+
+      if (responseTimes.length === 0) {
+        return { average: 0, median: 0, count: 0 };
+      }
+
+      const sortedTimes = responseTimes.sort((a, b) => a - b);
+      const average = responseTimes.reduce((sum, time) => sum + time, 0) / responseTimes.length;
+      const median = sortedTimes.length % 2 === 0
+        ? (sortedTimes[sortedTimes.length / 2 - 1] + sortedTimes[sortedTimes.length / 2]) / 2
+        : sortedTimes[Math.floor(sortedTimes.length / 2)];
+
+      return {
+        average: Math.round(average * 100) / 100,
+        median: Math.round(median * 100) / 100,
+        count: responseTimes.length
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateAssignmentResponseTime:', error.message);
+      return { average: 0, median: 0, count: 0 };
+    }
+  }
+
+  /**
+   * Analyze category-specific assignment performance
+   * @param {Array} categoryData - Category and status data
+   * @returns {Object} Category performance analysis
+   */
+  analyzeCategoryAssignmentPerformance(categoryData) {
+    try {
+      if (!categoryData || categoryData.length === 0) {
+        return {
+          recyclable: { total: 0, completed: 0, rate: 0 },
+          illegal_dumping: { total: 0, completed: 0, rate: 0 },
+          hazardous_waste: { total: 0, completed: 0, rate: 0 }
+        };
+      }
+
+      const categoryStats = {
+        recyclable: { total: 0, completed: 0 },
+        illegal_dumping: { total: 0, completed: 0 },
+        hazardous_waste: { total: 0, completed: 0 }
+      };
+
+      categoryData.forEach(item => {
+        if (item.category && categoryStats[item.category]) {
+          categoryStats[item.category].total++;
+          if (item.status === 'Completed') {
+            categoryStats[item.category].completed++;
+          }
+        }
+      });
+
+      // Calculate completion rates for each category
+      Object.keys(categoryStats).forEach(category => {
+        const stats = categoryStats[category];
+        stats.rate = stats.total > 0 
+          ? Math.round((stats.completed / stats.total) * 100)
+          : 0;
+      });
+
+      return categoryStats;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - analyzeCategoryAssignmentPerformance:', error.message);
+      return {
+        recyclable: { total: 0, completed: 0, rate: 0 },
+        illegal_dumping: { total: 0, completed: 0, rate: 0 },
+        hazardous_waste: { total: 0, completed: 0, rate: 0 }
+      };
+    }
+  }
+
+  /**
+   * Calculate composite assignment efficiency score
+   * @param {Object} metrics - Assignment metrics
+   * @returns {Number} Efficiency score (0-100)
+   */
+  calculateAssignmentEfficiencyScore(metrics) {
+    try {
+      const { accuracy, completion, responseTime } = metrics;
+      
+      // Normalize response time score (lower is better, cap at 24 hours)
+      const maxResponseTime = 24; // hours
+      const responseTimeScore = responseTime > 0 
+        ? Math.max(0, 100 - ((responseTime / maxResponseTime) * 100))
+        : 100;
+
+      // Weighted composite score
+      const weights = {
+        accuracy: 0.4,    // 40% - assignment accuracy
+        completion: 0.4,  // 40% - completion rate
+        responseTime: 0.2 // 20% - response time
+      };
+
+      const compositeScore = 
+        (accuracy * weights.accuracy) +
+        (completion * weights.completion) +
+        (responseTimeScore * weights.responseTime);
+
+      return Math.round(compositeScore);
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateAssignmentEfficiencyScore:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculate system-wide assignment metrics
+   * @param {Array} driverTracking - Array of driver assignment tracking data
+   * @returns {Object} System assignment metrics
+   */
+  calculateSystemAssignmentMetrics(driverTracking) {
+    try {
+      if (!driverTracking || driverTracking.length === 0) {
+        return {
+          totalAssignments: 0,
+          systemAccuracy: 0,
+          systemCompletionRate: 0,
+          averageResponseTime: 0,
+          efficiencyDistribution: { high: 0, medium: 0, low: 0 }
+        };
+      }
+
+      const totalAssignments = driverTracking.reduce((sum, driver) => sum + driver.totalAssignments, 0);
+      const totalCompleted = driverTracking.reduce((sum, driver) => sum + driver.completedAssignments, 0);
+      const totalRejected = driverTracking.reduce((sum, driver) => sum + driver.rejectedAssignments, 0);
+
+      const systemAccuracy = totalAssignments > 0 
+        ? Math.round(((totalAssignments - totalRejected) / totalAssignments) * 100)
+        : 100;
+
+      const systemCompletionRate = totalAssignments > 0
+        ? Math.round((totalCompleted / totalAssignments) * 100)
+        : 0;
+
+      const validResponseTimes = driverTracking
+        .filter(d => d.averageResponseTime > 0)
+        .map(d => d.averageResponseTime);
+      const averageResponseTime = validResponseTimes.length > 0
+        ? Math.round((validResponseTimes.reduce((sum, time) => sum + time, 0) / validResponseTimes.length) * 100) / 100
+        : 0;
+
+      // Calculate efficiency distribution
+      const efficiencyScores = driverTracking.map(d => d.efficiencyScore);
+      const efficiencyDistribution = {
+        high: efficiencyScores.filter(score => score >= 80).length,
+        medium: efficiencyScores.filter(score => score >= 60 && score < 80).length,
+        low: efficiencyScores.filter(score => score < 60).length
+      };
+
+      return {
+        totalAssignments,
+        systemAccuracy,
+        systemCompletionRate,
+        averageResponseTime,
+        efficiencyDistribution
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateSystemAssignmentMetrics:', error.message);
+      return {
+        totalAssignments: 0,
+        systemAccuracy: 0,
+        systemCompletionRate: 0,
+        averageResponseTime: 0,
+        efficiencyDistribution: { high: 0, medium: 0, low: 0 }
+      };
+    }
+  }
 
   /**
    * Validate date range
