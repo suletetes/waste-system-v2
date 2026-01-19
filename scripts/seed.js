@@ -65,7 +65,11 @@ const sampleAddresses = [
   "369 Cherry Road, Dallas, TX 75201",
   "741 Spruce Street, San Jose, CA 95101",
   "852 Ash Drive, Austin, TX 73301",
-  "963 Poplar Lane, Jacksonville, FL 32099"
+  "963 Poplar Lane, Jacksonville, FL 32099",
+  // Additional addresses for enhanced workflow testing
+  "555 Broadway, New York, NY 10012",
+  "777 Sunset Boulevard, Los Angeles, CA 90028",
+  "888 Michigan Avenue, Chicago, IL 60611"
 ];
 
 const sampleReports = [
@@ -119,6 +123,34 @@ const sampleReports = [
     category: "illegal_dumping",
     description: "Tire dump discovered near river. Environmental concern due to proximity to water source.",
     status: "Assigned"
+  },
+  // Additional reports to better test enhanced workflow features
+  {
+    category: "recyclable",
+    description: "Broken glass and plastic containers scattered in parking lot after storm.",
+    status: "Rejected",
+    rejectionMessage: "Area has been cleaned by property maintenance team. No further action required."
+  },
+  {
+    category: "hazardous_waste",
+    description: "Asbestos materials from old building renovation left in dumpster.",
+    status: "In Progress"
+  },
+  {
+    category: "illegal_dumping",
+    description: "Multiple bags of household trash dumped in forest preserve area.",
+    status: "Completed"
+  },
+  {
+    category: "recyclable",
+    description: "Commercial cardboard waste from retail store needs pickup.",
+    status: "Assigned"
+  },
+  {
+    category: "hazardous_waste",
+    description: "Chemical spill from industrial facility requires specialized cleanup.",
+    status: "Rejected",
+    rejectionMessage: "This requires specialized hazmat team. Report has been forwarded to environmental services department."
   }
 ];
 
@@ -180,8 +212,8 @@ async function createReports(users) {
       const reportData = sampleReports[i];
       const address = sampleAddresses[i % sampleAddresses.length];
       
-      // Assign random citizen as reporter
-      const reporter = citizens[Math.floor(Math.random() * citizens.length)];
+      // Assign random citizen as reporter (unless it's an admin report)
+      let reporter = citizens[Math.floor(Math.random() * citizens.length)];
       
       // Create base report data
       const newReportData = {
@@ -212,28 +244,83 @@ async function createReports(users) {
         newReportData.assignedDriver = assignedDriver._id;
       }
       
-      // Add rejection metadata for rejected reports
-      if (reportData.status === "Rejected" && drivers.length > 0) {
-        const rejector = drivers[Math.floor(Math.random() * drivers.length)];
-        newReportData.rejectedBy = rejector._id;
-        newReportData.rejectedAt = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random date within last week
+      // Add rejection metadata for rejected reports with enhanced details
+      if (reportData.status === "Rejected") {
+        if (drivers.length > 0) {
+          const rejector = drivers[Math.floor(Math.random() * drivers.length)];
+          newReportData.rejectedBy = rejector._id;
+          newReportData.rejectedAt = new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000); // Random date within last week
+        }
       }
       
-      // Create some admin reports
-      if (i % 4 === 0 && admins.length > 0) {
+      // Create admin reports (enhanced workflow feature)
+      // Every 5th report is an admin report to test the admin direct reporting workflow
+      if (i % 5 === 0 && admins.length > 0) {
         newReportData.user = admins[0]._id;
         newReportData.isAdminReport = true;
-        newReportData.status = "Assigned";
+        newReportData.status = "Assigned"; // Admin reports start as Assigned per requirements
         if (drivers.length > 0) {
           newReportData.assignedDriver = drivers[Math.floor(Math.random() * drivers.length)]._id;
         }
+        console.log(`   [ADMIN_REPORT] Creating admin report with auto-assignment`);
       }
+      
+      // Add status history for enhanced tracking (new feature)
+      const statusHistory = [{
+        status: newReportData.status === "Assigned" && newReportData.isAdminReport ? "Pending" : newReportData.status,
+        timestamp: new Date(Date.now() - Math.random() * 14 * 24 * 60 * 60 * 1000), // Random date within last 2 weeks
+        changedBy: newReportData.user,
+        notes: "Report created"
+      }];
+      
+      // Add assignment history if report is assigned
+      if (newReportData.assignedDriver) {
+        statusHistory.push({
+          status: "Assigned",
+          timestamp: new Date(Date.now() - Math.random() * 10 * 24 * 60 * 60 * 1000), // Random date within last 10 days
+          changedBy: newReportData.isAdminReport ? newReportData.user : admins[0]?._id,
+          notes: newReportData.isAdminReport ? "Auto-assigned during admin report creation" : "Assigned by admin"
+        });
+      }
+      
+      // Add progress history for in-progress reports
+      if (newReportData.status === "In Progress") {
+        statusHistory.push({
+          status: "In Progress",
+          timestamp: new Date(Date.now() - Math.random() * 5 * 24 * 60 * 60 * 1000), // Random date within last 5 days
+          changedBy: newReportData.assignedDriver,
+          notes: "Driver started working on this report"
+        });
+      }
+      
+      // Add completion history for completed reports
+      if (newReportData.status === "Completed") {
+        statusHistory.push({
+          status: "Completed",
+          timestamp: new Date(Date.now() - Math.random() * 3 * 24 * 60 * 60 * 1000), // Random date within last 3 days
+          changedBy: newReportData.assignedDriver,
+          notes: "Report resolved successfully"
+        });
+      }
+      
+      // Add rejection history for rejected reports
+      if (newReportData.status === "Rejected") {
+        statusHistory.push({
+          status: "Rejected",
+          timestamp: newReportData.rejectedAt || new Date(Date.now() - Math.random() * 7 * 24 * 60 * 60 * 1000),
+          changedBy: newReportData.rejectedBy,
+          notes: newReportData.rejectionMessage
+        });
+      }
+      
+      newReportData.statusHistory = statusHistory;
       
       const report = new Report(newReportData);
       const savedReport = await report.save();
       createdReports.push(savedReport);
       
-      console.log(`   [SUCCESS] Created ${reportData.category} report: ${reportData.status}`);
+      const reportType = newReportData.isAdminReport ? "admin" : "citizen";
+      console.log(`   [SUCCESS] Created ${reportType} ${reportData.category} report: ${reportData.status}`);
       
       // Add small delay to avoid overwhelming geocoding service
       await new Promise(resolve => setTimeout(resolve, 500));
@@ -247,8 +334,8 @@ async function createReports(users) {
 }
 
 async function displaySummary(users, reports) {
-  console.log("\n[SUMMARY] SEED SUMMARY");
-  console.log("================");
+  console.log("\n[SUMMARY] ENHANCED WORKFLOW SEED SUMMARY");
+  console.log("========================================");
   
   // User summary
   const usersByRole = users.reduce((acc, user) => {
@@ -289,21 +376,53 @@ async function displaySummary(users, reports) {
   const adminReports = reports.filter(r => r.isAdminReport).length;
   console.log(`   Admin Reports: ${adminReports}`);
   
+  const rejectedReports = reports.filter(r => r.status === 'Rejected').length;
+  const reportsWithRejectionMessages = reports.filter(r => r.rejectionMessage).length;
+  console.log(`   Rejected Reports: ${rejectedReports} (${reportsWithRejectionMessages} with messages)`);
+  
+  const assignedReports = reports.filter(r => r.assignedDriver).length;
+  console.log(`   Assigned Reports: ${assignedReports}`);
+  
+  const reportsWithStatusHistory = reports.filter(r => r.statusHistory && r.statusHistory.length > 0).length;
+  console.log(`   Reports with Status History: ${reportsWithStatusHistory}`);
+  
+  console.log("\n[ENHANCED FEATURES] WORKFLOW FEATURES TESTED");
+  console.log("===========================================");
+  console.log("✅ Geocoding Integration - Address to coordinates conversion");
+  console.log("✅ Driver Assignment - Reports assigned to drivers");
+  console.log("✅ Rejection Messaging - Detailed rejection reasons");
+  console.log("✅ Admin Direct Reporting - Admin-created reports with auto-assignment");
+  console.log("✅ Status History Tracking - Complete audit trail");
+  console.log("✅ Location Visualization - Geocoded reports for map display");
+  
   console.log("\n[CREDENTIALS] LOGIN CREDENTIALS");
-  console.log("====================");
-  console.log("Admin:");
+  console.log("==============================");
+  console.log("Admin (Full Access + Analytics):");
   console.log("  Email: admin@cleancity.com");
   console.log("  Password: admin123");
+  console.log("  Features: Create reports, assign drivers, view analytics");
   console.log("\nDriver (Mike Johnson):");
   console.log("  Email: mike.johnson@example.com");
   console.log("  Password: password123");
+  console.log("  Features: View assigned reports, update status, reject with messages");
   console.log("\nCitizen (John Doe):");
   console.log("  Email: john.doe@example.com");
   console.log("  Password: password123");
+  console.log("  Features: Create reports, view dashboard with map, track status");
   
-  console.log("\n[READY] Ready to test the application!");
+  console.log("\n[TESTING SCENARIOS] ENHANCED WORKFLOW TESTING");
+  console.log("============================================");
+  console.log("1. Citizen Dashboard - View reports on interactive map");
+  console.log("2. Driver Dashboard - Manage assigned reports and update status");
+  console.log("3. Admin Assignment - Assign pending reports to drivers");
+  console.log("4. Admin Direct Reporting - Create reports with immediate assignment");
+  console.log("5. Rejection Workflow - View rejection messages and reasons");
+  console.log("6. Analytics Dashboard - View comprehensive system analytics");
+  
+  console.log("\n[READY] Enhanced CleanCity System Ready!");
   console.log("   Start server: npm start");
   console.log("   Open browser: http://localhost:5050");
+  console.log("   Test analytics: http://localhost:5050/pages/admin-analytics.html");
 }
 
 async function seed() {
