@@ -24,7 +24,15 @@ router.use(requireAdmin);
  */
 router.get('/trends', async (req, res) => {
   try {
-    const { startDate, endDate, category = 'all', status = 'all' } = req.query;
+    const { 
+      startDate, 
+      endDate, 
+      category = 'all', 
+      status = 'all',
+      page = 1,
+      limit = 100,
+      optimize = 'true'
+    } = req.query;
 
     // Validate required parameters
     if (!startDate || !endDate) {
@@ -40,14 +48,76 @@ router.get('/trends', async (req, res) => {
 
     const dateRange = { startDate: new Date(startDate), endDate: new Date(endDate) };
     const filters = { category, status };
+    const pagination = { page: parseInt(page), limit: parseInt(limit) };
 
     // Check cache first
-    const cacheKey = cacheService.generateCacheKey('trends', filters, dateRange);
+    const cacheKey = cacheService.generateCacheKey('trends', { ...filters, ...pagination }, dateRange);
     let result = await cacheService.getCachedData(cacheKey);
 
     if (!result) {
+      // Estimate dataset size for performance optimization
+      const sizeEstimate = await dataAggregation.estimateDatasetSize({
+        createdAt: { $gte: dateRange.startDate, $lte: dateRange.endDate },
+        ...(category !== 'all' && { category }),
+        ...(status !== 'all' && { status })
+      });
+
+      // Show progress indicator for large datasets
+      let progressTracker = null;
+      if (sizeEstimate.totalDocuments > 10000) {
+        progressTracker = dataAggregation.createProgressTracker('trends-analysis', 3);
+        progressTracker.updateProgress(1, 'Analyzing dataset size');
+      }
+
       // Generate fresh data with quality metrics
       const trendData = await dataAggregation.aggregateTrendsByCategory(dateRange, filters);
+      
+      if (progressTracker) {
+        progressTracker.updateProgress(2, 'Processing trend data');
+      }
+
+      // Apply pagination if requested
+      let paginatedData = trendData;
+      if (pagination.limit < 1000) { // Only paginate if reasonable limit
+        // For trends, pagination applies to daily data points
+        const startIndex = (pagination.page - 1) * pagination.limit;
+        const endIndex = startIndex + pagination.limit;
+        
+        if (trendData.dailyTrends) {
+          const totalItems = trendData.dailyTrends.length;
+          paginatedData = {
+            ...trendData,
+            dailyTrends: trendData.dailyTrends.slice(startIndex, endIndex),
+            pagination: {
+              page: pagination.page,
+              limit: pagination.limit,
+              total: totalItems,
+              totalPages: Math.ceil(totalItems / pagination.limit),
+              hasNext: endIndex < totalItems,
+              hasPrev: pagination.page > 1
+            }
+          };
+        }
+      }
+
+      // Add performance metrics
+      result = {
+        success: true,
+        data: paginatedData,
+        performance: {
+          datasetSize: sizeEstimate,
+          processingTime: Date.now(),
+          optimizationApplied: optimize === 'true'
+        }
+      };
+
+      if (progressTracker) {
+        progressTracker.complete('Trend analysis completed');
+      }
+
+      // Cache the result
+      await cacheService.cacheAnalyticsData(cacheKey, result);
+    }
       const dataQuality = await analyticsEngine.calculateDataQuality(trendData.rawRecords || []);
       
       result = {
@@ -746,6 +816,223 @@ router.delete('/cache', async (req, res) => {
       error: {
         code: 'CACHE_CLEAR_ERROR',
         message: 'Failed to clear cache',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/analytics/status-transitions
+ * Get detailed status transition analytics and workflow patterns
+ */
+router.get('/status-transitions', async (req, res) => {
+  try {
+    const { startDate, endDate, category = 'all' } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_DATE_RANGE',
+          message: 'startDate and endDate are required',
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+
+    const dateRange = { startDate: new Date(startDate), endDate: new Date(endDate) };
+    const filters = { category };
+
+    const cacheKey = cacheService.generateCacheKey('status-transitions', filters, dateRange);
+    let transitionData = await cacheService.getCachedData(cacheKey);
+
+    if (!transitionData) {
+      // Get reports for the date range
+      const matchCriteria = {
+        createdAt: { $gte: dateRange.startDate, $lte: dateRange.endDate }
+      };
+
+      if (category !== 'all') {
+        matchCriteria.category = category;
+      }
+
+      const reports = await Report.find(matchCriteria).select('status statusHistory category createdAt updatedAt');
+      
+      // Generate comprehensive status analytics
+      transitionData = await analyticsEngine.generateStatusAnalytics(reports);
+      
+      await cacheService.cacheAnalyticsData(cacheKey, transitionData, 300); // 5 minute cache
+    }
+
+    res.json({
+      success: true,
+      data: transitionData,
+      filters: { dateRange, category },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Analytics API - /status-transitions:', error.message);
+    res.status(500).json({
+      error: {
+        code: 'STATUS_TRANSITION_ERROR',
+        message: 'Failed to generate status transition analytics',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/analytics/workflow-timeline
+ * Get workflow timeline visualization data
+ */
+router.get('/workflow-timeline', async (req, res) => {
+  try {
+    const { 
+      startDate, 
+      endDate, 
+      category = 'all', 
+      groupBy = 'day',
+      maxReports = 100 
+    } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_DATE_RANGE',
+          message: 'startDate and endDate are required',
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+
+    const dateRange = { startDate: new Date(startDate), endDate: new Date(endDate) };
+    const options = { groupBy, category, maxReports: parseInt(maxReports) };
+
+    const cacheKey = cacheService.generateCacheKey('workflow-timeline', options, dateRange);
+    let timelineData = await cacheService.getCachedData(cacheKey);
+
+    if (!timelineData) {
+      // Get reports with status history for timeline analysis
+      const matchCriteria = {
+        createdAt: { $gte: dateRange.startDate, $lte: dateRange.endDate },
+        statusHistory: { $exists: true, $ne: [] }
+      };
+
+      if (category !== 'all') {
+        matchCriteria.category = category;
+      }
+
+      const reports = await Report.find(matchCriteria)
+        .select('_id status statusHistory category createdAt updatedAt')
+        .sort({ createdAt: -1 })
+        .limit(parseInt(maxReports));
+      
+      // Generate workflow timeline
+      timelineData = await analyticsEngine.generateWorkflowTimeline(reports, options);
+      
+      await cacheService.cacheAnalyticsData(cacheKey, timelineData, 600); // 10 minute cache
+    }
+
+    res.json({
+      success: true,
+      data: timelineData,
+      options,
+      filters: { dateRange, category },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Analytics API - /workflow-timeline:', error.message);
+    res.status(500).json({
+      error: {
+        code: 'WORKFLOW_TIMELINE_ERROR',
+        message: 'Failed to generate workflow timeline',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
+ * GET /api/analytics/workflow-bottlenecks
+ * Get workflow bottleneck analysis
+ */
+router.get('/workflow-bottlenecks', async (req, res) => {
+  try {
+    const { startDate, endDate, category = 'all', severity = 'all' } = req.query;
+
+    if (!startDate || !endDate) {
+      return res.status(400).json({
+        error: {
+          code: 'INVALID_DATE_RANGE',
+          message: 'startDate and endDate are required',
+          timestamp: new Date().toISOString()
+        }
+      });
+    }
+
+    const dateRange = { startDate: new Date(startDate), endDate: new Date(endDate) };
+    const filters = { category, severity };
+
+    const cacheKey = cacheService.generateCacheKey('workflow-bottlenecks', filters, dateRange);
+    let bottleneckData = await cacheService.getCachedData(cacheKey);
+
+    if (!bottleneckData) {
+      // Get reports with status history
+      const matchCriteria = {
+        createdAt: { $gte: dateRange.startDate, $lte: dateRange.endDate },
+        statusHistory: { $exists: true, $ne: [] }
+      };
+
+      if (category !== 'all') {
+        matchCriteria.category = category;
+      }
+
+      const reports = await Report.find(matchCriteria)
+        .select('_id status statusHistory category createdAt updatedAt');
+      
+      // Generate workflow timeline to get bottleneck analysis
+      const timelineData = await analyticsEngine.generateWorkflowTimeline(reports, { category });
+      
+      // Filter bottlenecks by severity if specified
+      let bottlenecks = timelineData.bottlenecks;
+      if (severity !== 'all') {
+        const severityThreshold = severity === 'high' ? 70 : severity === 'medium' ? 40 : 0;
+        bottlenecks = bottlenecks.filter(b => b.severity >= severityThreshold);
+      }
+
+      bottleneckData = {
+        bottlenecks,
+        summary: {
+          totalBottlenecks: bottlenecks.length,
+          highSeverity: bottlenecks.filter(b => b.severity >= 70).length,
+          mediumSeverity: bottlenecks.filter(b => b.severity >= 40 && b.severity < 70).length,
+          lowSeverity: bottlenecks.filter(b => b.severity < 40).length
+        },
+        efficiencyMetrics: timelineData.efficiencyMetrics
+      };
+      
+      await cacheService.cacheAnalyticsData(cacheKey, bottleneckData, 900); // 15 minute cache
+    }
+
+    res.json({
+      success: true,
+      data: bottleneckData,
+      filters: { dateRange, category, severity },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Analytics API - /workflow-bottlenecks:', error.message);
+    res.status(500).json({
+      error: {
+        code: 'WORKFLOW_BOTTLENECK_ERROR',
+        message: 'Failed to generate workflow bottleneck analysis',
         details: error.message,
         timestamp: new Date().toISOString()
       }

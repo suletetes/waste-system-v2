@@ -556,7 +556,7 @@ class AnalyticsEngine {
   }
 
   /**
-   * Generate status analytics for reports
+   * Generate comprehensive status analytics with transition analysis
    * @param {Array} reports - Array of reports to analyze
    * @returns {Object} Status distribution and transition analytics
    */
@@ -577,20 +577,23 @@ class AnalyticsEngine {
         percentage: totalReports > 0 ? Math.round((count / totalReports) * 100) : 0
       }));
 
-      // Calculate average time in each status (simplified - would need status history for full implementation)
-      const completedReports = validReports.filter(r => r.status === 'Completed');
-      const averageResolutionTime = completedReports.length > 0
-        ? Math.round(completedReports.reduce((sum, report) => {
-            return sum + (new Date(report.updatedAt) - new Date(report.createdAt));
-          }, 0) / completedReports.length / (1000 * 60 * 60)) // Convert to hours
-        : 0;
+      // Calculate status transition analytics
+      const transitionAnalytics = await this.calculateStatusTransitions(validReports);
+      
+      // Calculate workflow timing analytics
+      const workflowTimings = await this.calculateWorkflowTimings(validReports);
+
+      // Calculate average time in each status using status history
+      const statusTimeAnalytics = await this.calculateStatusTimeAnalytics(validReports);
 
       return {
         totalReports,
         validReports: validReports.length,
         excludedReports: reports.length - validReports.length,
         statusDistribution,
-        averageResolutionTime,
+        transitionAnalytics,
+        workflowTimings,
+        statusTimeAnalytics,
         completionRate: totalReports > 0 
           ? Math.round((statusCounts['Completed'] / totalReports) * 100)
           : 0,
@@ -602,6 +605,628 @@ class AnalyticsEngine {
     } catch (error) {
       console.error('[ERROR] Analytics Engine - generateStatusAnalytics:', error.message);
       throw new Error(`Status analytics generation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calculate status transition patterns and frequencies
+   * @param {Array} reports - Array of reports with status history
+   * @returns {Object} Status transition analytics
+   */
+  async calculateStatusTransitions(reports) {
+    try {
+      const transitions = new Map();
+      const transitionCounts = {};
+      const transitionTimes = {};
+
+      // Initialize transition tracking
+      this.validStatuses.forEach(fromStatus => {
+        this.validStatuses.forEach(toStatus => {
+          if (fromStatus !== toStatus) {
+            const key = `${fromStatus}->${toStatus}`;
+            transitionCounts[key] = 0;
+            transitionTimes[key] = [];
+          }
+        });
+      });
+
+      // Process each report's status history
+      reports.forEach(report => {
+        if (report.statusHistory && report.statusHistory.length > 1) {
+          for (let i = 1; i < report.statusHistory.length; i++) {
+            const fromStatus = report.statusHistory[i - 1].status;
+            const toStatus = report.statusHistory[i].status;
+            const transitionKey = `${fromStatus}->${toStatus}`;
+
+            if (transitionCounts.hasOwnProperty(transitionKey)) {
+              transitionCounts[transitionKey]++;
+              
+              // Calculate transition time
+              const fromTime = new Date(report.statusHistory[i - 1].timestamp);
+              const toTime = new Date(report.statusHistory[i].timestamp);
+              const transitionTime = (toTime - fromTime) / (1000 * 60 * 60); // Hours
+              
+              if (transitionTime >= 0) {
+                transitionTimes[transitionKey].push(transitionTime);
+              }
+            }
+          }
+        }
+      });
+
+      // Calculate transition statistics
+      const transitionStats = Object.entries(transitionCounts).map(([transition, count]) => {
+        const times = transitionTimes[transition];
+        const averageTime = times.length > 0 
+          ? Math.round((times.reduce((sum, time) => sum + time, 0) / times.length) * 100) / 100
+          : 0;
+        
+        const [fromStatus, toStatus] = transition.split('->');
+        
+        return {
+          fromStatus,
+          toStatus,
+          count,
+          averageTime,
+          medianTime: times.length > 0 ? this.calculateMedian(times) : 0,
+          minTime: times.length > 0 ? Math.min(...times) : 0,
+          maxTime: times.length > 0 ? Math.max(...times) : 0
+        };
+      }).filter(stat => stat.count > 0);
+
+      // Calculate most common transition paths
+      const commonPaths = this.identifyCommonTransitionPaths(reports);
+
+      return {
+        transitionStats,
+        commonPaths,
+        totalTransitions: Object.values(transitionCounts).reduce((sum, count) => sum + count, 0)
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateStatusTransitions:', error.message);
+      return {
+        transitionStats: [],
+        commonPaths: [],
+        totalTransitions: 0
+      };
+    }
+  }
+
+  /**
+   * Calculate comprehensive workflow timing analytics
+   * @param {Array} reports - Array of reports with status history
+   * @returns {Object} Workflow timing analytics
+   */
+  async calculateWorkflowTimings(reports) {
+    try {
+      const workflowMetrics = {
+        averageResolutionTime: 0,
+        medianResolutionTime: 0,
+        resolutionTimeByCategory: {},
+        timeToAssignment: 0,
+        timeToCompletion: 0,
+        timeToRejection: 0,
+        workflowEfficiency: 0
+      };
+
+      const resolutionTimes = [];
+      const assignmentTimes = [];
+      const completionTimes = [];
+      const rejectionTimes = [];
+      const categoryResolutionTimes = {};
+
+      // Initialize category tracking
+      this.validCategories.forEach(category => {
+        categoryResolutionTimes[category] = [];
+      });
+
+      reports.forEach(report => {
+        if (report.statusHistory && report.statusHistory.length > 0) {
+          const startTime = new Date(report.statusHistory[0].timestamp);
+          const category = report.category;
+
+          // Find specific status timestamps
+          const assignedStatus = report.statusHistory.find(h => h.status === 'Assigned');
+          const completedStatus = report.statusHistory.find(h => h.status === 'Completed');
+          const rejectedStatus = report.statusHistory.find(h => h.status === 'Rejected');
+
+          // Calculate time to assignment
+          if (assignedStatus) {
+            const assignmentTime = (new Date(assignedStatus.timestamp) - startTime) / (1000 * 60 * 60);
+            if (assignmentTime >= 0) {
+              assignmentTimes.push(assignmentTime);
+            }
+          }
+
+          // Calculate resolution times
+          if (completedStatus) {
+            const resolutionTime = (new Date(completedStatus.timestamp) - startTime) / (1000 * 60 * 60);
+            if (resolutionTime >= 0) {
+              resolutionTimes.push(resolutionTime);
+              completionTimes.push(resolutionTime);
+              
+              if (categoryResolutionTimes[category]) {
+                categoryResolutionTimes[category].push(resolutionTime);
+              }
+            }
+          }
+
+          if (rejectedStatus) {
+            const rejectionTime = (new Date(rejectedStatus.timestamp) - startTime) / (1000 * 60 * 60);
+            if (rejectionTime >= 0) {
+              resolutionTimes.push(rejectionTime);
+              rejectionTimes.push(rejectionTime);
+            }
+          }
+        }
+      });
+
+      // Calculate metrics
+      workflowMetrics.averageResolutionTime = this.calculateAverage(resolutionTimes);
+      workflowMetrics.medianResolutionTime = this.calculateMedian(resolutionTimes);
+      workflowMetrics.timeToAssignment = this.calculateAverage(assignmentTimes);
+      workflowMetrics.timeToCompletion = this.calculateAverage(completionTimes);
+      workflowMetrics.timeToRejection = this.calculateAverage(rejectionTimes);
+
+      // Calculate resolution times by category
+      Object.entries(categoryResolutionTimes).forEach(([category, times]) => {
+        workflowMetrics.resolutionTimeByCategory[category] = {
+          average: this.calculateAverage(times),
+          median: this.calculateMedian(times),
+          count: times.length
+        };
+      });
+
+      // Calculate workflow efficiency (percentage of reports resolved within target time)
+      const targetResolutionTime = 48; // 48 hours target
+      const efficientResolutions = resolutionTimes.filter(time => time <= targetResolutionTime).length;
+      workflowMetrics.workflowEfficiency = resolutionTimes.length > 0
+        ? Math.round((efficientResolutions / resolutionTimes.length) * 100)
+        : 0;
+
+      return workflowMetrics;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateWorkflowTimings:', error.message);
+      return {
+        averageResolutionTime: 0,
+        medianResolutionTime: 0,
+        resolutionTimeByCategory: {},
+        timeToAssignment: 0,
+        timeToCompletion: 0,
+        timeToRejection: 0,
+        workflowEfficiency: 0
+      };
+    }
+  }
+
+  /**
+   * Calculate time spent in each status
+   * @param {Array} reports - Array of reports with status history
+   * @returns {Object} Status time analytics
+   */
+  async calculateStatusTimeAnalytics(reports) {
+    try {
+      const statusTimes = {};
+      
+      // Initialize status time tracking
+      this.validStatuses.forEach(status => {
+        statusTimes[status] = [];
+      });
+
+      reports.forEach(report => {
+        if (report.statusHistory && report.statusHistory.length > 0) {
+          for (let i = 0; i < report.statusHistory.length; i++) {
+            const currentStatus = report.statusHistory[i];
+            const nextStatus = report.statusHistory[i + 1];
+            
+            if (nextStatus) {
+              // Calculate time spent in current status
+              const timeInStatus = (new Date(nextStatus.timestamp) - new Date(currentStatus.timestamp)) / (1000 * 60 * 60);
+              if (timeInStatus >= 0) {
+                statusTimes[currentStatus.status].push(timeInStatus);
+              }
+            } else if (i === report.statusHistory.length - 1) {
+              // For the final status, calculate time from status change to now (or updatedAt)
+              const endTime = report.updatedAt ? new Date(report.updatedAt) : new Date();
+              const timeInStatus = (endTime - new Date(currentStatus.timestamp)) / (1000 * 60 * 60);
+              if (timeInStatus >= 0) {
+                statusTimes[currentStatus.status].push(timeInStatus);
+              }
+            }
+          }
+        }
+      });
+
+      // Calculate statistics for each status
+      const statusAnalytics = {};
+      Object.entries(statusTimes).forEach(([status, times]) => {
+        statusAnalytics[status] = {
+          averageTime: this.calculateAverage(times),
+          medianTime: this.calculateMedian(times),
+          minTime: times.length > 0 ? Math.min(...times) : 0,
+          maxTime: times.length > 0 ? Math.max(...times) : 0,
+          totalReports: times.length,
+          totalTime: times.reduce((sum, time) => sum + time, 0)
+        };
+      });
+
+      return statusAnalytics;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateStatusTimeAnalytics:', error.message);
+      return {};
+    }
+  }
+
+  /**
+   * Generate timeline visualization data for workflow analysis
+   * @param {Array} reports - Array of reports with status history
+   * @param {Object} options - Visualization options
+   * @returns {Object} Timeline visualization data
+   */
+  async generateWorkflowTimeline(reports, options = {}) {
+    try {
+      const { groupBy = 'day', category = 'all', maxReports = 100 } = options;
+      
+      // Filter reports by category if specified
+      let filteredReports = reports;
+      if (category !== 'all') {
+        filteredReports = reports.filter(r => r.category === category);
+      }
+
+      // Limit reports for performance
+      if (filteredReports.length > maxReports) {
+        filteredReports = filteredReports
+          .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt))
+          .slice(0, maxReports);
+      }
+
+      const timelineData = [];
+      const statusEvents = [];
+
+      filteredReports.forEach(report => {
+        if (report.statusHistory && report.statusHistory.length > 0) {
+          const reportTimeline = {
+            reportId: report._id,
+            category: report.category,
+            totalDuration: 0,
+            events: []
+          };
+
+          // Process each status in the history
+          for (let i = 0; i < report.statusHistory.length; i++) {
+            const currentStatus = report.statusHistory[i];
+            const nextStatus = report.statusHistory[i + 1];
+            
+            const startTime = new Date(currentStatus.timestamp);
+            const endTime = nextStatus 
+              ? new Date(nextStatus.timestamp)
+              : (report.updatedAt ? new Date(report.updatedAt) : new Date());
+
+            const duration = (endTime - startTime) / (1000 * 60 * 60); // Hours
+
+            const event = {
+              status: currentStatus.status,
+              startTime: startTime.toISOString(),
+              endTime: endTime.toISOString(),
+              duration: Math.round(duration * 100) / 100,
+              isActive: !nextStatus // Last status is currently active
+            };
+
+            reportTimeline.events.push(event);
+            reportTimeline.totalDuration += duration;
+
+            // Add to global status events for aggregation
+            statusEvents.push({
+              ...event,
+              reportId: report._id,
+              category: report.category
+            });
+          }
+
+          timelineData.push(reportTimeline);
+        }
+      });
+
+      // Generate aggregated timeline by time period
+      const aggregatedTimeline = this.aggregateTimelineByPeriod(statusEvents, groupBy);
+
+      // Calculate workflow bottlenecks
+      const bottlenecks = this.identifyWorkflowBottlenecks(statusEvents);
+
+      // Generate workflow efficiency metrics
+      const efficiencyMetrics = this.calculateWorkflowEfficiencyMetrics(timelineData);
+
+      return {
+        reportTimelines: timelineData,
+        aggregatedTimeline,
+        bottlenecks,
+        efficiencyMetrics,
+        totalReports: filteredReports.length,
+        timeRange: {
+          start: Math.min(...filteredReports.map(r => new Date(r.createdAt))).toISOString(),
+          end: Math.max(...filteredReports.map(r => new Date(r.updatedAt || r.createdAt))).toISOString()
+        }
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - generateWorkflowTimeline:', error.message);
+      throw new Error(`Workflow timeline generation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Aggregate timeline events by time period
+   * @param {Array} statusEvents - Array of status events
+   * @param {String} groupBy - Time period ('hour', 'day', 'week')
+   * @returns {Array} Aggregated timeline data
+   */
+  aggregateTimelineByPeriod(statusEvents, groupBy) {
+    try {
+      const aggregationMap = new Map();
+      
+      statusEvents.forEach(event => {
+        const eventDate = new Date(event.startTime);
+        let periodKey;
+
+        switch (groupBy) {
+          case 'hour':
+            periodKey = `${eventDate.getFullYear()}-${eventDate.getMonth() + 1}-${eventDate.getDate()}-${eventDate.getHours()}`;
+            break;
+          case 'week':
+            const weekStart = new Date(eventDate);
+            weekStart.setDate(eventDate.getDate() - eventDate.getDay());
+            periodKey = `${weekStart.getFullYear()}-W${Math.ceil(weekStart.getDate() / 7)}`;
+            break;
+          case 'day':
+          default:
+            periodKey = `${eventDate.getFullYear()}-${eventDate.getMonth() + 1}-${eventDate.getDate()}`;
+            break;
+        }
+
+        if (!aggregationMap.has(periodKey)) {
+          aggregationMap.set(periodKey, {
+            period: periodKey,
+            statusCounts: {},
+            totalEvents: 0,
+            averageDuration: 0,
+            categories: {}
+          });
+        }
+
+        const periodData = aggregationMap.get(periodKey);
+        periodData.totalEvents++;
+        
+        // Count status occurrences
+        periodData.statusCounts[event.status] = (periodData.statusCounts[event.status] || 0) + 1;
+        
+        // Track category distribution
+        periodData.categories[event.category] = (periodData.categories[event.category] || 0) + 1;
+        
+        // Update average duration
+        const currentAvg = periodData.averageDuration;
+        const newCount = periodData.totalEvents;
+        periodData.averageDuration = ((currentAvg * (newCount - 1)) + event.duration) / newCount;
+      });
+
+      return Array.from(aggregationMap.values())
+        .sort((a, b) => a.period.localeCompare(b.period));
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - aggregateTimelineByPeriod:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Identify workflow bottlenecks based on status duration analysis
+   * @param {Array} statusEvents - Array of status events
+   * @returns {Array} Identified bottlenecks
+   */
+  identifyWorkflowBottlenecks(statusEvents) {
+    try {
+      const statusDurations = {};
+      
+      // Group durations by status
+      statusEvents.forEach(event => {
+        if (!statusDurations[event.status]) {
+          statusDurations[event.status] = [];
+        }
+        statusDurations[event.status].push(event.duration);
+      });
+
+      const bottlenecks = [];
+
+      // Analyze each status for bottleneck indicators
+      Object.entries(statusDurations).forEach(([status, durations]) => {
+        if (durations.length === 0) return;
+
+        const average = this.calculateAverage(durations);
+        const median = this.calculateMedian(durations);
+        const percentile90 = this.calculatePercentile(durations, 90);
+        const percentile95 = this.calculatePercentile(durations, 95);
+
+        // Identify bottleneck conditions
+        const isBottleneck = 
+          average > 24 || // Average time > 24 hours
+          percentile90 > 72 || // 90% of cases > 72 hours
+          (median > 0 && average / median > 2); // High variance (average >> median)
+
+        if (isBottleneck) {
+          bottlenecks.push({
+            status,
+            severity: this.calculateBottleneckSeverity(average, percentile90, percentile95),
+            metrics: {
+              averageDuration: Math.round(average * 100) / 100,
+              medianDuration: Math.round(median * 100) / 100,
+              percentile90: Math.round(percentile90 * 100) / 100,
+              percentile95: Math.round(percentile95 * 100) / 100,
+              totalCases: durations.length
+            },
+            recommendations: this.generateBottleneckRecommendations(status, average, percentile90)
+          });
+        }
+      });
+
+      return bottlenecks.sort((a, b) => b.severity - a.severity);
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - identifyWorkflowBottlenecks:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Calculate bottleneck severity score
+   * @param {Number} average - Average duration
+   * @param {Number} percentile90 - 90th percentile duration
+   * @param {Number} percentile95 - 95th percentile duration
+   * @returns {Number} Severity score (0-100)
+   */
+  calculateBottleneckSeverity(average, percentile90, percentile95) {
+    try {
+      let severity = 0;
+
+      // Base severity on average duration
+      if (average > 168) severity += 40; // > 1 week
+      else if (average > 72) severity += 30; // > 3 days
+      else if (average > 24) severity += 20; // > 1 day
+      else if (average > 12) severity += 10; // > 12 hours
+
+      // Add severity based on 90th percentile
+      if (percentile90 > 336) severity += 30; // > 2 weeks
+      else if (percentile90 > 168) severity += 20; // > 1 week
+      else if (percentile90 > 72) severity += 15; // > 3 days
+
+      // Add severity based on variance (95th vs 90th percentile)
+      const variance = percentile95 - percentile90;
+      if (variance > 168) severity += 20; // High variance
+      else if (variance > 72) severity += 10;
+
+      return Math.min(100, severity);
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateBottleneckSeverity:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Generate recommendations for addressing bottlenecks
+   * @param {String} status - Status with bottleneck
+   * @param {Number} average - Average duration
+   * @param {Number} percentile90 - 90th percentile duration
+   * @returns {Array} Recommendations
+   */
+  generateBottleneckRecommendations(status, average, percentile90) {
+    const recommendations = [];
+
+    try {
+      switch (status) {
+        case 'Pending':
+          recommendations.push('Consider automated assignment rules to reduce pending time');
+          if (average > 24) {
+            recommendations.push('Implement priority queuing for urgent incidents');
+          }
+          break;
+
+        case 'Assigned':
+          recommendations.push('Review driver workload distribution');
+          if (percentile90 > 72) {
+            recommendations.push('Consider additional driver resources or reassignment policies');
+          }
+          break;
+
+        case 'In Progress':
+          recommendations.push('Analyze field completion challenges');
+          if (average > 48) {
+            recommendations.push('Provide additional tools or training for complex incidents');
+          }
+          break;
+
+        default:
+          recommendations.push(`Review ${status.toLowerCase()} process for optimization opportunities`);
+          break;
+      }
+
+      // General recommendations based on severity
+      if (average > 168) {
+        recommendations.push('Critical: Implement escalation procedures for long-running cases');
+      }
+
+      return recommendations;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - generateBottleneckRecommendations:', error.message);
+      return ['Review process for optimization opportunities'];
+    }
+  }
+
+  /**
+   * Calculate workflow efficiency metrics from timeline data
+   * @param {Array} timelineData - Array of report timelines
+   * @returns {Object} Efficiency metrics
+   */
+  calculateWorkflowEfficiencyMetrics(timelineData) {
+    try {
+      if (!timelineData || timelineData.length === 0) {
+        return {
+          averageWorkflowDuration: 0,
+          medianWorkflowDuration: 0,
+          efficiencyScore: 0,
+          completionRate: 0,
+          categoryEfficiency: {}
+        };
+      }
+
+      const durations = timelineData.map(timeline => timeline.totalDuration);
+      const completedTimelines = timelineData.filter(timeline => 
+        timeline.events.some(event => event.status === 'Completed')
+      );
+
+      // Calculate category-specific efficiency
+      const categoryEfficiency = {};
+      this.validCategories.forEach(category => {
+        const categoryTimelines = timelineData.filter(t => t.category === category);
+        if (categoryTimelines.length > 0) {
+          const categoryDurations = categoryTimelines.map(t => t.totalDuration);
+          categoryEfficiency[category] = {
+            averageDuration: this.calculateAverage(categoryDurations),
+            medianDuration: this.calculateMedian(categoryDurations),
+            count: categoryTimelines.length,
+            completionRate: Math.round((categoryTimelines.filter(t => 
+              t.events.some(e => e.status === 'Completed')
+            ).length / categoryTimelines.length) * 100)
+          };
+        }
+      });
+
+      // Calculate overall efficiency score (0-100)
+      const targetDuration = 48; // 48 hours target
+      const efficientWorkflows = durations.filter(d => d <= targetDuration).length;
+      const efficiencyScore = Math.round((efficientWorkflows / durations.length) * 100);
+
+      return {
+        averageWorkflowDuration: this.calculateAverage(durations),
+        medianWorkflowDuration: this.calculateMedian(durations),
+        efficiencyScore,
+        completionRate: Math.round((completedTimelines.length / timelineData.length) * 100),
+        categoryEfficiency,
+        totalWorkflows: timelineData.length,
+        efficientWorkflows
+      };
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateWorkflowEfficiencyMetrics:', error.message);
+      return {
+        averageWorkflowDuration: 0,
+        medianWorkflowDuration: 0,
+        efficiencyScore: 0,
+        completionRate: 0,
+        categoryEfficiency: {}
+      };
     }
   }
 

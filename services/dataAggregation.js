@@ -606,6 +606,275 @@ class DataAggregationService {
   // Utility methods
 
   /**
+   * Add pagination to aggregation pipeline
+   * @param {Array} pipeline - MongoDB aggregation pipeline
+   * @param {Object} pagination - Pagination options { page, limit }
+   * @returns {Array} Pipeline with pagination stages
+   */
+  addPagination(pipeline, pagination = {}) {
+    const { page = 1, limit = 100 } = pagination;
+    const skip = (page - 1) * limit;
+
+    // Add pagination stages
+    pipeline.push(
+      { $skip: skip },
+      { $limit: limit }
+    );
+
+    return pipeline;
+  }
+
+  /**
+   * Get paginated results with total count
+   * @param {String} collection - Collection name
+   * @param {Array} pipeline - Aggregation pipeline
+   * @param {Object} pagination - Pagination options
+   * @returns {Promise<Object>} Paginated results with metadata
+   */
+  async getPaginatedResults(collection, pipeline, pagination = {}) {
+    try {
+      const { page = 1, limit = 100 } = pagination;
+      const skip = (page - 1) * limit;
+
+      // Create count pipeline (without pagination)
+      const countPipeline = [...pipeline, { $count: "total" }];
+      
+      // Create data pipeline (with pagination)
+      const dataPipeline = [...pipeline, { $skip: skip }, { $limit: limit }];
+
+      // Execute both pipelines
+      const [countResult, dataResult] = await Promise.all([
+        Report.aggregate(countPipeline),
+        Report.aggregate(dataPipeline)
+      ]);
+
+      const total = countResult.length > 0 ? countResult[0].total : 0;
+      const totalPages = Math.ceil(total / limit);
+
+      return {
+        data: dataResult,
+        pagination: {
+          page,
+          limit,
+          total,
+          totalPages,
+          hasNext: page < totalPages,
+          hasPrev: page > 1
+        }
+      };
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - getPaginatedResults:', error.message);
+      throw new Error(`Pagination failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Optimize aggregation pipeline for large datasets
+   * @param {Array} pipeline - Original pipeline
+   * @param {Object} options - Optimization options
+   * @returns {Array} Optimized pipeline
+   */
+  optimizePipeline(pipeline, options = {}) {
+    const { 
+      addIndexHints = true, 
+      limitEarlyStages = true,
+      maxDocuments = 50000,
+      useAllowDiskUse = true 
+    } = options;
+
+    const optimizedPipeline = [...pipeline];
+
+    // Add early limiting for performance
+    if (limitEarlyStages && maxDocuments) {
+      // Find the first $match stage and add limit after it
+      const matchIndex = optimizedPipeline.findIndex(stage => stage.$match);
+      if (matchIndex !== -1) {
+        optimizedPipeline.splice(matchIndex + 1, 0, { $limit: maxDocuments });
+      }
+    }
+
+    // Add index hints for common queries
+    if (addIndexHints) {
+      const matchStage = optimizedPipeline.find(stage => stage.$match);
+      if (matchStage && matchStage.$match.createdAt) {
+        // Hint to use the date-based index
+        optimizedPipeline.unshift({ $hint: { createdAt: 1, category: 1, status: 1 } });
+      }
+    }
+
+    return optimizedPipeline;
+  }
+
+  /**
+   * Execute aggregation with performance monitoring
+   * @param {String} collection - Collection name
+   * @param {Array} pipeline - Aggregation pipeline
+   * @param {Object} options - Execution options
+   * @returns {Promise<Object>} Results with performance metrics
+   */
+  async executeWithPerformanceMonitoring(collection, pipeline, options = {}) {
+    const startTime = Date.now();
+    const { timeout = 30000, allowDiskUse = true } = options;
+
+    try {
+      // Add performance optimizations
+      const optimizedPipeline = this.optimizePipeline(pipeline, options);
+
+      // Execute with timeout and disk use allowance
+      const aggregationOptions = {
+        allowDiskUse,
+        maxTimeMS: timeout
+      };
+
+      const results = await Report.aggregate(optimizedPipeline, aggregationOptions);
+      const executionTime = Date.now() - startTime;
+
+      // Log performance warnings
+      if (executionTime > 10000) { // 10 seconds
+        console.warn(`[WARN] DataAggregation - Slow query detected: ${executionTime}ms`);
+      }
+
+      return {
+        data: results,
+        performance: {
+          executionTime,
+          documentCount: results.length,
+          pipelineStages: optimizedPipeline.length
+        }
+      };
+
+    } catch (error) {
+      const executionTime = Date.now() - startTime;
+      
+      if (error.code === 50 || error.message.includes('timeout')) {
+        throw new Error(`Query timeout after ${executionTime}ms. Consider adding filters or pagination.`);
+      }
+      
+      console.error('[ERROR] DataAggregation - executeWithPerformanceMonitoring:', error.message);
+      throw error;
+    }
+  }
+
+  /**
+   * Get dataset size estimation
+   * @param {Object} matchCriteria - Match criteria for estimation
+   * @returns {Promise<Object>} Size estimation
+   */
+  async estimateDatasetSize(matchCriteria = {}) {
+    try {
+      const pipeline = [
+        { $match: matchCriteria },
+        {
+          $group: {
+            _id: null,
+            totalDocuments: { $sum: 1 },
+            avgDocumentSize: { $avg: { $bsonSize: "$$ROOT" } },
+            dateRange: {
+              $push: {
+                min: { $min: "$createdAt" },
+                max: { $max: "$createdAt" }
+              }
+            }
+          }
+        }
+      ];
+
+      const results = await Report.aggregate(pipeline);
+      
+      if (results.length === 0) {
+        return {
+          totalDocuments: 0,
+          estimatedSizeMB: 0,
+          recommendedPageSize: 100,
+          processingComplexity: 'low'
+        };
+      }
+
+      const stats = results[0];
+      const estimatedSizeMB = (stats.totalDocuments * stats.avgDocumentSize) / (1024 * 1024);
+      
+      // Recommend page size based on dataset size
+      let recommendedPageSize = 100;
+      let processingComplexity = 'low';
+      
+      if (stats.totalDocuments > 100000) {
+        recommendedPageSize = 50;
+        processingComplexity = 'high';
+      } else if (stats.totalDocuments > 10000) {
+        recommendedPageSize = 75;
+        processingComplexity = 'medium';
+      }
+
+      return {
+        totalDocuments: stats.totalDocuments,
+        estimatedSizeMB: Math.round(estimatedSizeMB * 100) / 100,
+        recommendedPageSize,
+        processingComplexity,
+        avgDocumentSize: Math.round(stats.avgDocumentSize)
+      };
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - estimateDatasetSize:', error.message);
+      return {
+        totalDocuments: 0,
+        estimatedSizeMB: 0,
+        recommendedPageSize: 100,
+        processingComplexity: 'unknown'
+      };
+    }
+  }
+
+  /**
+   * Create progress indicator for long-running operations
+   * @param {String} operationId - Unique operation identifier
+   * @param {Number} totalSteps - Total number of steps
+   * @returns {Object} Progress tracker
+   */
+  createProgressTracker(operationId, totalSteps) {
+    const startTime = Date.now();
+    let currentStep = 0;
+
+    return {
+      operationId,
+      totalSteps,
+      
+      updateProgress: (step, message = '') => {
+        currentStep = step;
+        const progress = Math.round((step / totalSteps) * 100);
+        const elapsed = Date.now() - startTime;
+        const estimatedTotal = totalSteps > 0 ? (elapsed / step) * totalSteps : 0;
+        const remaining = estimatedTotal - elapsed;
+
+        console.log(`[PROGRESS] ${operationId}: ${progress}% (${step}/${totalSteps}) - ${message}`);
+        
+        return {
+          progress,
+          currentStep: step,
+          totalSteps,
+          elapsedTime: elapsed,
+          estimatedRemaining: remaining > 0 ? remaining : 0,
+          message
+        };
+      },
+
+      complete: (message = 'Operation completed') => {
+        const totalTime = Date.now() - startTime;
+        console.log(`[COMPLETE] ${operationId}: ${message} (${totalTime}ms)`);
+        
+        return {
+          progress: 100,
+          currentStep: totalSteps,
+          totalSteps,
+          elapsedTime: totalTime,
+          estimatedRemaining: 0,
+          message
+        };
+      }
+    };
+  }
+
+  /**
    * Validate date range
    * @param {Object} dateRange - { startDate, endDate }
    * @returns {Object} Validated date range
