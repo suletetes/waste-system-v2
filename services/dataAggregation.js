@@ -1,0 +1,645 @@
+import mongoose from 'mongoose';
+import Report from '../models/report.js';
+import User from '../models/User.js';
+
+/**
+ * Data Aggregation Service - Optimized MongoDB aggregation pipelines for analytics
+ * Handles complex data aggregation operations with performance optimization
+ */
+class DataAggregationService {
+  constructor() {
+    this.validCategories = ['recyclable', 'illegal_dumping', 'hazardous_waste'];
+    this.validStatuses = ['Pending', 'Assigned', 'In Progress', 'Completed', 'Rejected'];
+  }
+
+  /**
+   * Aggregate trend data by category and date range
+   * @param {Object} dateRange - { startDate, endDate }
+   * @param {Object} filters - Optional filters { category, status }
+   * @returns {Promise<Array>} Aggregated trend data
+   */
+  async aggregateTrendsByCategory(dateRange, filters = {}) {
+    try {
+      const { startDate, endDate } = this.validateDateRange(dateRange);
+      
+      // Build match stage
+      const matchStage = {
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      if (filters.status && filters.status !== 'all') {
+        matchStage.status = filters.status;
+      }
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $group: {
+            _id: {
+              date: { $dateToString: { format: "%Y-%m-%d", date: "$createdAt" } },
+              category: "$category"
+            },
+            count: { $sum: 1 },
+            reports: {
+              $push: {
+                id: "$_id",
+                status: "$status",
+                createdAt: "$createdAt"
+              }
+            }
+          }
+        },
+        {
+          $group: {
+            _id: "$_id.date",
+            categories: {
+              $push: {
+                category: "$_id.category",
+                count: "$count",
+                reports: "$reports"
+              }
+            },
+            totalCount: { $sum: "$count" }
+          }
+        },
+        { $sort: { "_id": 1 } },
+        {
+          $project: {
+            date: "$_id",
+            categories: 1,
+            totalCount: 1,
+            _id: 0
+          }
+        }
+      ];
+
+      const results = await Report.aggregate(pipeline);
+      return this.formatTrendResults(results);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - aggregateTrendsByCategory:', error.message);
+      throw new Error(`Trend aggregation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Aggregate status transitions and workflow analytics
+   * @param {Object} dateRange - Date range for analysis
+   * @param {Object} filters - Optional filters
+   * @returns {Promise<Object>} Status transition analytics
+   */
+  async aggregateStatusTransitions(dateRange, filters = {}) {
+    try {
+      const { startDate, endDate } = this.validateDateRange(dateRange);
+      
+      const matchStage = {
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $group: {
+            _id: "$status",
+            count: { $sum: 1 },
+            averageResolutionTime: {
+              $avg: {
+                $cond: [
+                  { $eq: ["$status", "Completed"] },
+                  { $subtract: ["$updatedAt", "$createdAt"] },
+                  null
+                ]
+              }
+            },
+            reports: {
+              $push: {
+                id: "$_id",
+                category: "$category",
+                createdAt: "$createdAt",
+                updatedAt: "$updatedAt",
+                resolutionTime: {
+                  $cond: [
+                    { $in: ["$status", ["Completed", "Rejected"]] },
+                    { $subtract: ["$updatedAt", "$createdAt"] },
+                    null
+                  ]
+                }
+              }
+            }
+          }
+        },
+        {
+          $project: {
+            status: "$_id",
+            count: 1,
+            averageResolutionTime: {
+              $cond: [
+                { $ne: ["$averageResolutionTime", null] },
+                { $divide: ["$averageResolutionTime", 1000 * 60 * 60] }, // Convert to hours
+                0
+              ]
+            },
+            reports: 1,
+            _id: 0
+          }
+        },
+        { $sort: { count: -1 } }
+      ];
+
+      const results = await Report.aggregate(pipeline);
+      return this.formatStatusResults(results);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - aggregateStatusTransitions:', error.message);
+      throw new Error(`Status aggregation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Aggregate reports by geographic location
+   * @param {Object} bounds - Geographic bounds { north, south, east, west }
+   * @param {Object} filters - Optional filters
+   * @returns {Promise<Array>} Geographic aggregation results
+   */
+  async aggregateByLocation(bounds = null, filters = {}) {
+    try {
+      const matchStage = {
+        latitude: { $exists: true, $ne: null },
+        longitude: { $exists: true, $ne: null }
+      };
+
+      // Add geographic bounds if provided
+      if (bounds) {
+        matchStage.latitude = { 
+          $gte: bounds.south, 
+          $lte: bounds.north 
+        };
+        matchStage.longitude = { 
+          $gte: bounds.west, 
+          $lte: bounds.east 
+        };
+      }
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      if (filters.dateRange) {
+        const { startDate, endDate } = this.validateDateRange(filters.dateRange);
+        matchStage.createdAt = { $gte: startDate, $lte: endDate };
+      }
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $group: {
+            _id: {
+              // Grid-based grouping for density calculation (0.01 degree grid ≈ 1km)
+              lat: { $floor: { $multiply: ["$latitude", 100] } },
+              lng: { $floor: { $multiply: ["$longitude", 100] } }
+            },
+            count: { $sum: 1 },
+            categories: {
+              $push: "$category"
+            },
+            reports: {
+              $push: {
+                id: "$_id",
+                category: "$category",
+                status: "$status",
+                createdAt: "$createdAt",
+                description: { $substr: ["$description", 0, 100] }
+              }
+            },
+            avgLat: { $avg: "$latitude" },
+            avgLng: { $avg: "$longitude" }
+          }
+        },
+        {
+          $project: {
+            coordinates: ["$avgLng", "$avgLat"],
+            incidentCount: "$count",
+            density: { $multiply: ["$count", 1] }, // Simplified density calculation
+            categoryBreakdown: {
+              $reduce: {
+                input: "$categories",
+                initialValue: {},
+                in: {
+                  $mergeObjects: [
+                    "$$value",
+                    {
+                      $arrayToObject: [
+                        [{ k: "$$this", v: { $add: [{ $ifNull: [{ $getField: { field: "$$this", input: "$$value" } }, 0] }, 1] } }]
+                      ]
+                    }
+                  ]
+                }
+              }
+            },
+            reports: 1,
+            _id: 0
+          }
+        },
+        { $sort: { incidentCount: -1 } }
+      ];
+
+      const results = await Report.aggregate(pipeline);
+      return this.formatGeographicResults(results);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - aggregateByLocation:', error.message);
+      throw new Error(`Geographic aggregation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Calculate density grid for heat map visualization
+   * @param {Number} gridSize - Grid size in degrees (default: 0.01)
+   * @param {Object} filters - Optional filters
+   * @returns {Promise<Array>} Density grid data
+   */
+  async calculateDensityGrid(gridSize = 0.01, filters = {}) {
+    try {
+      const matchStage = {
+        latitude: { $exists: true, $ne: null },
+        longitude: { $exists: true, $ne: null }
+      };
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      if (filters.dateRange) {
+        const { startDate, endDate } = this.validateDateRange(filters.dateRange);
+        matchStage.createdAt = { $gte: startDate, $lte: endDate };
+      }
+
+      const gridMultiplier = 1 / gridSize;
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $group: {
+            _id: {
+              lat: { $floor: { $multiply: ["$latitude", gridMultiplier] } },
+              lng: { $floor: { $multiply: ["$longitude", gridMultiplier] } }
+            },
+            count: { $sum: 1 },
+            centerLat: { $avg: "$latitude" },
+            centerLng: { $avg: "$longitude" }
+          }
+        },
+        {
+          $project: {
+            coordinates: ["$centerLng", "$centerLat"],
+            intensity: "$count",
+            gridSize: gridSize,
+            _id: 0
+          }
+        },
+        { $sort: { intensity: -1 } }
+      ];
+
+      return await Report.aggregate(pipeline);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - calculateDensityGrid:', error.message);
+      throw new Error(`Density grid calculation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Aggregate driver performance statistics
+   * @param {String} timeframe - Timeframe for analysis ('7d', '30d', '90d')
+   * @param {Object} filters - Optional filters
+   * @returns {Promise<Object>} Driver performance statistics
+   */
+  async aggregateDriverStats(timeframe = '30d', filters = {}) {
+    try {
+      const endDate = new Date();
+      const startDate = new Date();
+      
+      // Calculate start date based on timeframe
+      switch (timeframe) {
+        case '7d':
+          startDate.setDate(endDate.getDate() - 7);
+          break;
+        case '30d':
+          startDate.setDate(endDate.getDate() - 30);
+          break;
+        case '90d':
+          startDate.setDate(endDate.getDate() - 90);
+          break;
+        default:
+          startDate.setDate(endDate.getDate() - 30);
+      }
+
+      const matchStage = {
+        assignedDriver: { $exists: true, $ne: null },
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $group: {
+            _id: "$assignedDriver",
+            assignedReports: { $sum: 1 },
+            completedReports: {
+              $sum: { $cond: [{ $eq: ["$status", "Completed"] }, 1, 0] }
+            },
+            rejectedReports: {
+              $sum: { $cond: [{ $eq: ["$status", "Rejected"] }, 1, 0] }
+            },
+            inProgressReports: {
+              $sum: { $cond: [{ $eq: ["$status", "In Progress"] }, 1, 0] }
+            },
+            pendingReports: {
+              $sum: { $cond: [{ $eq: ["$status", "Assigned"] }, 1, 0] }
+            },
+            totalResolutionTime: {
+              $sum: {
+                $cond: [
+                  { $eq: ["$status", "Completed"] },
+                  { $subtract: ["$updatedAt", "$createdAt"] },
+                  0
+                ]
+              }
+            }
+          }
+        },
+        {
+          $lookup: {
+            from: "users",
+            localField: "_id",
+            foreignField: "_id",
+            as: "driverInfo"
+          }
+        },
+        {
+          $project: {
+            driverId: "$_id",
+            assignedReports: 1,
+            completedReports: 1,
+            rejectedReports: 1,
+            inProgressReports: 1,
+            pendingReports: 1,
+            completionRate: {
+              $cond: [
+                { $gt: ["$assignedReports", 0] },
+                { $multiply: [{ $divide: ["$completedReports", "$assignedReports"] }, 100] },
+                0
+              ]
+            },
+            rejectionRate: {
+              $cond: [
+                { $gt: ["$assignedReports", 0] },
+                { $multiply: [{ $divide: ["$rejectedReports", "$assignedReports"] }, 100] },
+                0
+              ]
+            },
+            averageResolutionTime: {
+              $cond: [
+                { $gt: ["$completedReports", 0] },
+                { $divide: ["$totalResolutionTime", { $multiply: ["$completedReports", 1000 * 60 * 60] }] }, // Convert to hours
+                0
+              ]
+            },
+            // Privacy protection - only include performance metrics
+            driverExists: { $gt: [{ $size: "$driverInfo" }, 0] },
+            _id: 0
+          }
+        },
+        { $match: { driverExists: true } }, // Only include valid drivers
+        { $sort: { completionRate: -1 } }
+      ];
+
+      const results = await Report.aggregate(pipeline);
+      return this.formatDriverResults(results, timeframe);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - aggregateDriverStats:', error.message);
+      throw new Error(`Driver stats aggregation failed: ${error.message}`);
+    }
+  }
+
+  /**
+   * Aggregate resolution times by category
+   * @param {Object} dateRange - Date range for analysis
+   * @param {Object} filters - Optional filters
+   * @returns {Promise<Array>} Resolution time statistics
+   */
+  async aggregateResolutionTimes(dateRange, filters = {}) {
+    try {
+      const { startDate, endDate } = this.validateDateRange(dateRange);
+      
+      const matchStage = {
+        status: { $in: ["Completed", "Rejected"] },
+        createdAt: { $gte: startDate, $lte: endDate }
+      };
+
+      if (filters.category && filters.category !== 'all') {
+        matchStage.category = filters.category;
+      }
+
+      const pipeline = [
+        { $match: matchStage },
+        {
+          $addFields: {
+            resolutionTime: { $subtract: ["$updatedAt", "$createdAt"] }
+          }
+        },
+        {
+          $group: {
+            _id: {
+              category: "$category",
+              status: "$status"
+            },
+            count: { $sum: 1 },
+            averageResolutionTime: { $avg: "$resolutionTime" },
+            minResolutionTime: { $min: "$resolutionTime" },
+            maxResolutionTime: { $max: "$resolutionTime" },
+            totalResolutionTime: { $sum: "$resolutionTime" }
+          }
+        },
+        {
+          $project: {
+            category: "$_id.category",
+            status: "$_id.status",
+            count: 1,
+            averageResolutionTime: { $divide: ["$averageResolutionTime", 1000 * 60 * 60] }, // Convert to hours
+            minResolutionTime: { $divide: ["$minResolutionTime", 1000 * 60 * 60] },
+            maxResolutionTime: { $divide: ["$maxResolutionTime", 1000 * 60 * 60] },
+            _id: 0
+          }
+        },
+        { $sort: { category: 1, status: 1 } }
+      ];
+
+      return await Report.aggregate(pipeline);
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - aggregateResolutionTimes:', error.message);
+      throw new Error(`Resolution time aggregation failed: ${error.message}`);
+    }
+  }
+
+  // Helper methods for data formatting
+
+  /**
+   * Format trend aggregation results
+   * @param {Array} results - Raw aggregation results
+   * @returns {Object} Formatted trend data
+   */
+  formatTrendResults(results) {
+    return {
+      totalDays: results.length,
+      totalIncidents: results.reduce((sum, day) => sum + day.totalCount, 0),
+      dailyData: results.map(day => ({
+        date: day.date,
+        total: day.totalCount,
+        categories: day.categories.reduce((acc, cat) => {
+          acc[cat.category] = cat.count;
+          return acc;
+        }, {})
+      })),
+      categoryTotals: results.reduce((totals, day) => {
+        day.categories.forEach(cat => {
+          totals[cat.category] = (totals[cat.category] || 0) + cat.count;
+        });
+        return totals;
+      }, {})
+    };
+  }
+
+  /**
+   * Format status aggregation results
+   * @param {Array} results - Raw status results
+   * @returns {Object} Formatted status analytics
+   */
+  formatStatusResults(results) {
+    const totalReports = results.reduce((sum, status) => sum + status.count, 0);
+    
+    return {
+      totalReports,
+      statusDistribution: results.map(status => ({
+        ...status,
+        percentage: totalReports > 0 ? Math.round((status.count / totalReports) * 100) : 0
+      })),
+      summary: {
+        completionRate: this.calculateStatusPercentage(results, 'Completed', totalReports),
+        rejectionRate: this.calculateStatusPercentage(results, 'Rejected', totalReports),
+        inProgressRate: this.calculateStatusPercentage(results, 'In Progress', totalReports),
+        pendingRate: this.calculateStatusPercentage(results, 'Pending', totalReports)
+      }
+    };
+  }
+
+  /**
+   * Format geographic aggregation results
+   * @param {Array} results - Raw geographic results
+   * @returns {Object} Formatted geographic data
+   */
+  formatGeographicResults(results) {
+    return {
+      totalLocations: results.length,
+      totalIncidents: results.reduce((sum, loc) => sum + loc.incidentCount, 0),
+      locations: results.map(location => ({
+        coordinates: location.coordinates,
+        incidentCount: location.incidentCount,
+        density: Math.round(location.density * 100) / 100,
+        categoryBreakdown: location.categoryBreakdown || {},
+        topReports: location.reports.slice(0, 5) // Limit to top 5 reports per location
+      }))
+    };
+  }
+
+  /**
+   * Format driver performance results
+   * @param {Array} results - Raw driver results
+   * @param {String} timeframe - Analysis timeframe
+   * @returns {Object} Formatted driver performance data
+   */
+  formatDriverResults(results, timeframe) {
+    return {
+      timeframe,
+      driverCount: results.length,
+      totalAssigned: results.reduce((sum, driver) => sum + driver.assignedReports, 0),
+      totalCompleted: results.reduce((sum, driver) => sum + driver.completedReports, 0),
+      systemAverages: {
+        completionRate: results.length > 0 
+          ? Math.round(results.reduce((sum, driver) => sum + driver.completionRate, 0) / results.length)
+          : 0,
+        rejectionRate: results.length > 0
+          ? Math.round(results.reduce((sum, driver) => sum + driver.rejectionRate, 0) / results.length)
+          : 0,
+        averageResolutionTime: results.length > 0
+          ? Math.round(results.reduce((sum, driver) => sum + driver.averageResolutionTime, 0) / results.length)
+          : 0
+      },
+      drivers: results.map(driver => ({
+        driverId: driver.driverId,
+        assignedReports: driver.assignedReports,
+        completedReports: driver.completedReports,
+        rejectedReports: driver.rejectedReports,
+        inProgressReports: driver.inProgressReports,
+        pendingReports: driver.pendingReports,
+        completionRate: Math.round(driver.completionRate),
+        rejectionRate: Math.round(driver.rejectionRate),
+        averageResolutionTime: Math.round(driver.averageResolutionTime * 100) / 100
+      }))
+    };
+  }
+
+  // Utility methods
+
+  /**
+   * Validate date range
+   * @param {Object} dateRange - { startDate, endDate }
+   * @returns {Object} Validated date range
+   */
+  validateDateRange(dateRange) {
+    if (!dateRange || !dateRange.startDate || !dateRange.endDate) {
+      throw new Error('Invalid date range: startDate and endDate are required');
+    }
+
+    const startDate = new Date(dateRange.startDate);
+    const endDate = new Date(dateRange.endDate);
+
+    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
+      throw new Error('Invalid date format in date range');
+    }
+
+    if (startDate > endDate) {
+      throw new Error('Start date cannot be after end date');
+    }
+
+    return { startDate, endDate };
+  }
+
+  /**
+   * Calculate percentage for specific status
+   * @param {Array} results - Status results
+   * @param {String} status - Status to calculate percentage for
+   * @param {Number} total - Total count
+   * @returns {Number} Percentage
+   */
+  calculateStatusPercentage(results, status, total) {
+    const statusData = results.find(r => r.status === status);
+    return statusData && total > 0 ? Math.round((statusData.count / total) * 100) : 0;
+  }
+}
+
+export default DataAggregationService;
