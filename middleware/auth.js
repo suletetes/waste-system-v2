@@ -29,6 +29,9 @@ const authenticate = (req, res, next) => {
   }
 };
 
+// Alias for authenticate function (for consistency with analytics routes)
+const authenticateToken = authenticate;
+
 // middleware/auth.js
 
 const authenticateAdmin = (req, res, next) => {
@@ -43,4 +46,7 @@ const authenticateAdmin = (req, res, next) => {
   }
 };
 
-export { authenticate, authenticateAdmin };
+// Alias for authenticateAdmin function (for consistency with analytics routes)
+const requireAdmin = authenticateAdmin;
+
+export { authenticate, authenticateAdmin, authenticateToken, requireAdmin };

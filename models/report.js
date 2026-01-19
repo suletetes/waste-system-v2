@@ -39,5 +39,11 @@ reportSchema.index({ latitude: 1, longitude: 1 }); // For geospatial queries
 reportSchema.index({ user: 1, createdAt: -1 }); // For user dashboard with recent reports
 reportSchema.index({ status: 1 }); // For status-based filtering
 
+// Additional indexes for analytics performance
+reportSchema.index({ createdAt: 1, category: 1 }); // For trend analysis by category
+reportSchema.index({ status: 1, assignedDriver: 1 }); // For driver performance analytics
+reportSchema.index({ createdAt: 1, status: 1, category: 1 }); // For comprehensive analytics queries
+reportSchema.index({ latitude: 1, longitude: 1, category: 1 }); // For geographic analytics by category
+
 const Report = mongoose.model("Report", reportSchema);
 export default Report;
