@@ -915,10 +915,16 @@ router.post('/export/pdf', async (req, res) => {
 router.get('/cache/stats', async (req, res) => {
   try {
     const stats = await cacheService.getCacheStats();
+    const status = cacheService.getStatus();
+    const connectionTest = await cacheService.testConnection();
     
     res.json({
       success: true,
-      data: stats,
+      data: {
+        ...stats,
+        status,
+        connectionTest
+      },
       timestamp: new Date().toISOString()
     });
 
@@ -928,6 +934,41 @@ router.get('/cache/stats', async (req, res) => {
       error: {
         code: 'CACHE_STATS_ERROR',
         message: 'Failed to retrieve cache statistics',
+        details: error.message,
+        timestamp: new Date().toISOString()
+      }
+    });
+  }
+});
+
+/**
+ * POST /api/analytics/cache/reconnect
+ * Attempt to reconnect to Redis cache
+ */
+router.post('/cache/reconnect', async (req, res) => {
+  try {
+    console.log('[INFO] Analytics API - Cache reconnection requested by admin');
+    
+    const reconnectResult = await cacheService.reconnect();
+    const status = cacheService.getStatus();
+    
+    res.json({
+      success: reconnectResult,
+      data: {
+        reconnected: reconnectResult,
+        status,
+        message: reconnectResult ? 'Successfully reconnected to Redis' : 'Failed to reconnect to Redis'
+      },
+      timestamp: new Date().toISOString()
+    });
+
+  } catch (error) {
+    console.error('[ERROR] Analytics API - /cache/reconnect:', error.message);
+    res.status(500).json({
+      success: false,
+      error: {
+        code: 'CACHE_RECONNECT_ERROR',
+        message: 'Failed to reconnect to cache',
         details: error.message,
         timestamp: new Date().toISOString()
       }
@@ -1194,11 +1235,11 @@ router.get('/health', async (req, res) => {
     const health = {
       analytics: true,
       database: 'unknown',
-      cache: cacheService.isAvailable(),
+      cache: 'unknown',
       timestamp: new Date().toISOString(),
       systemHealth: {
         database: 'connected',
-        cache: 'available',
+        cache: 'checking',
         dataFreshness: 0
       }
     };
@@ -1224,13 +1265,24 @@ router.get('/health', async (req, res) => {
       health.databaseError = dbError.message;
     }
 
-    // Check cache availability
+    // Check cache availability with detailed status
     try {
-      if (!cacheService.isAvailable()) {
+      const cacheStatus = cacheService.getStatus();
+      const connectionTest = await cacheService.testConnection();
+      
+      health.cache = cacheStatus;
+      health.cacheTest = connectionTest;
+      
+      if (cacheStatus.enabled && cacheStatus.connected) {
+        health.systemHealth.cache = 'available';
+      } else if (cacheStatus.enabled && !cacheStatus.connected) {
         health.systemHealth.cache = 'unavailable';
+      } else {
+        health.systemHealth.cache = 'disabled';
       }
+      
     } catch (cacheError) {
-      health.systemHealth.cache = 'unavailable';
+      health.systemHealth.cache = 'error';
       health.cacheError = cacheError.message;
     }
 
@@ -1246,7 +1298,7 @@ router.get('/health', async (req, res) => {
     }
 
     // Determine overall health status
-    const isHealthy = health.database === 'connected' && health.cache;
+    const isHealthy = health.database === 'connected';
     const status = isHealthy ? 200 : 503;
     
     res.status(status).json({

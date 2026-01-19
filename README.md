@@ -59,19 +59,55 @@ A comprehensive waste reporting system that enables citizens to report waste iss
    CLOUDINARY_CLOUD_NAME=your-cloud-name
    CLOUDINARY_API_KEY=your-api-key
    CLOUDINARY_API_SECRET=your-api-secret
+   
+   # Analytics Caching (Optional - Redis)
+   ENABLE_ANALYTICS_CACHE=false
+   CACHE_SILENT_MODE=true
+   REDIS_URL=redis://localhost:6379
    ```
 
-4. **Test Database Connection**
+4. **Optional: Redis Setup for Analytics Caching**
+   
+   Redis provides performance improvements for analytics queries but is not required.
+   
+   **Option 1: Skip Redis (Recommended for development)**
+   ```env
+   ENABLE_ANALYTICS_CACHE=false
+   CACHE_SILENT_MODE=true
+   ```
+   
+   **Option 2: Install Redis locally**
+   ```bash
+   # Windows (using Chocolatey)
+   choco install redis-64
+   
+   # macOS (using Homebrew)
+   brew install redis
+   
+   # Ubuntu/Debian
+   sudo apt install redis-server
+   
+   # Start Redis
+   redis-server
+   ```
+   
+   Then update your `.env`:
+   ```env
+   ENABLE_ANALYTICS_CACHE=true
+   CACHE_SILENT_MODE=false
+   ```
+
+5. **Test Database Connection**
    ```bash
    npm run db:test
    ```
 
-5. **Create Admin User**
+6. **Create Admin User**
    ```bash
    npm run admin:create
    ```
 
-6. **Start the Server**
+7. **Start the Server**
    ```bash
    npm start
    # or for development with auto-restart

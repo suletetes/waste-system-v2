@@ -6,60 +6,86 @@ dotenv.config();
 /**
  * Cache Service - Redis-based caching for analytics performance optimization
  * Handles cache operations, key generation, and cache warming strategies
+ * Gracefully falls back to no-cache mode when Redis is unavailable
  */
 class CacheService {
   constructor() {
     this.client = null;
     this.isConnected = false;
+    this.connectionAttempted = false;
     this.defaultTTL = parseInt(process.env.ANALYTICS_CACHE_TTL) || 300; // 5 minutes default
     this.cacheEnabled = process.env.ENABLE_ANALYTICS_CACHE === 'true';
     this.keyPrefix = 'cleancity:analytics:';
+    this.silentMode = process.env.CACHE_SILENT_MODE === 'true'; // Suppress Redis connection errors
     
-    if (this.cacheEnabled) {
+    // Only attempt Redis connection if explicitly enabled and not in silent mode
+    if (this.cacheEnabled && !this.silentMode) {
       this.initializeRedis();
+    } else if (this.cacheEnabled && this.silentMode) {
+      // In silent mode, try to connect but don't log errors
+      this.initializeRedisSilent();
+    } else {
+      console.log('[INFO] CacheService - Caching disabled via configuration');
     }
   }
 
   /**
-   * Initialize Redis connection
+   * Initialize Redis connection with full error logging
    */
   async initializeRedis() {
+    if (this.connectionAttempted) {
+      return;
+    }
+    
+    this.connectionAttempted = true;
+    
     try {
       const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
       
       this.client = redis.createClient({
         url: redisUrl,
+        socket: {
+          connectTimeout: 5000, // 5 second timeout
+          lazyConnect: true
+        },
         retry_strategy: (options) => {
           if (options.error && options.error.code === 'ECONNREFUSED') {
-            console.log('[WARNING] CacheService - Redis server connection refused');
+            console.log('[WARNING] CacheService - Redis server not available, falling back to no-cache mode');
+            this.cacheEnabled = false;
             return new Error('Redis server connection refused');
           }
-          if (options.total_retry_time > 1000 * 60 * 60) {
-            console.log('[WARNING] CacheService - Redis retry time exhausted');
+          if (options.total_retry_time > 10000) { // 10 seconds max retry time
+            console.log('[WARNING] CacheService - Redis retry time exhausted, disabling cache');
+            this.cacheEnabled = false;
             return new Error('Retry time exhausted');
           }
-          if (options.attempt > 10) {
-            console.log('[WARNING] CacheService - Redis max retry attempts reached');
+          if (options.attempt > 3) { // Max 3 attempts
+            console.log('[WARNING] CacheService - Redis max retry attempts reached, disabling cache');
+            this.cacheEnabled = false;
             return undefined;
           }
-          // Exponential backoff
-          return Math.min(options.attempt * 100, 3000);
+          return Math.min(options.attempt * 1000, 3000);
         }
       });
 
       this.client.on('error', (err) => {
-        console.error('[ERROR] CacheService - Redis error:', err.message);
+        if (!this.silentMode) {
+          console.error('[ERROR] CacheService - Redis error:', err.message);
+        }
         this.isConnected = false;
+        this.cacheEnabled = false; // Disable cache on persistent errors
       });
 
       this.client.on('connect', () => {
         console.log('[INFO] CacheService - Connected to Redis');
         this.isConnected = true;
+        this.cacheEnabled = true;
       });
 
       this.client.on('ready', () => {
         console.log('[INFO] CacheService - Redis client ready');
         this.isConnected = true;
+        this.cacheEnabled = true;
       });
 
       this.client.on('end', () => {
@@ -67,13 +93,84 @@ class CacheService {
         this.isConnected = false;
       });
 
-      await this.client.connect();
+      this.client.on('reconnecting', () => {
+        console.log('[INFO] CacheService - Reconnecting to Redis...');
+      });
+
+      // Attempt connection with timeout
+      const connectPromise = this.client.connect();
+      const timeoutPromise = new Promise((_, reject) => {
+        setTimeout(() => reject(new Error('Connection timeout')), 5000);
+      });
+
+      await Promise.race([connectPromise, timeoutPromise]);
       
     } catch (error) {
       console.error('[ERROR] CacheService - Redis initialization failed:', error.message);
       console.log('[INFO] CacheService - Falling back to no-cache mode');
       this.cacheEnabled = false;
       this.isConnected = false;
+      this.client = null;
+    }
+  }
+
+  /**
+   * Initialize Redis connection in silent mode (suppress errors)
+   */
+  async initializeRedisSilent() {
+    if (this.connectionAttempted) {
+      return;
+    }
+    
+    this.connectionAttempted = true;
+    
+    try {
+      const redisUrl = process.env.REDIS_URL || 'redis://localhost:6379';
+      
+      this.client = redis.createClient({
+        url: redisUrl,
+        socket: {
+          connectTimeout: 2000, // Shorter timeout in silent mode
+          lazyConnect: true
+        },
+        retry_strategy: () => {
+          // Don't retry in silent mode
+          this.cacheEnabled = false;
+          return undefined;
+        }
+      });
+
+      // Suppress all Redis errors in silent mode
+      this.client.on('error', () => {
+        this.isConnected = false;
+        this.cacheEnabled = false;
+      });
+
+      this.client.on('connect', () => {
+        this.isConnected = true;
+        this.cacheEnabled = true;
+      });
+
+      this.client.on('ready', () => {
+        this.isConnected = true;
+        this.cacheEnabled = true;
+      });
+
+      this.client.on('end', () => {
+        this.isConnected = false;
+      });
+
+      // Quick connection attempt
+      await Promise.race([
+        this.client.connect(),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Silent timeout')), 2000))
+      ]);
+      
+    } catch (error) {
+      // Silently fail and disable cache
+      this.cacheEnabled = false;
+      this.isConnected = false;
+      this.client = null;
     }
   }
 
@@ -455,6 +552,94 @@ class CacheService {
    */
   isAvailable() {
     return this.cacheEnabled && this.isConnected;
+  }
+
+  /**
+   * Get detailed cache service status
+   * @returns {Object} Detailed status information
+   */
+  getStatus() {
+    return {
+      enabled: this.cacheEnabled,
+      connected: this.isConnected,
+      connectionAttempted: this.connectionAttempted,
+      silentMode: this.silentMode,
+      redisUrl: process.env.REDIS_URL || 'redis://localhost:6379',
+      defaultTTL: this.defaultTTL,
+      keyPrefix: this.keyPrefix
+    };
+  }
+
+  /**
+   * Test Redis connection
+   * @returns {Promise<Object>} Connection test result
+   */
+  async testConnection() {
+    if (!this.cacheEnabled) {
+      return {
+        success: false,
+        message: 'Cache is disabled via configuration',
+        status: 'disabled'
+      };
+    }
+
+    if (!this.client) {
+      return {
+        success: false,
+        message: 'Redis client not initialized',
+        status: 'not_initialized'
+      };
+    }
+
+    try {
+      await this.client.ping();
+      return {
+        success: true,
+        message: 'Redis connection successful',
+        status: 'connected'
+      };
+    } catch (error) {
+      return {
+        success: false,
+        message: `Redis connection failed: ${error.message}`,
+        status: 'connection_failed'
+      };
+    }
+  }
+
+  /**
+   * Attempt to reconnect to Redis
+   * @returns {Promise<Boolean>} Reconnection success status
+   */
+  async reconnect() {
+    if (this.client && this.isConnected) {
+      console.log('[INFO] CacheService - Already connected to Redis');
+      return true;
+    }
+
+    console.log('[INFO] CacheService - Attempting to reconnect to Redis...');
+    
+    // Reset connection state
+    this.connectionAttempted = false;
+    this.isConnected = false;
+    
+    if (this.client) {
+      try {
+        await this.client.quit();
+      } catch (error) {
+        // Ignore errors when closing existing connection
+      }
+      this.client = null;
+    }
+
+    // Attempt new connection
+    if (this.silentMode) {
+      await this.initializeRedisSilent();
+    } else {
+      await this.initializeRedis();
+    }
+
+    return this.isConnected;
   }
 }
 
