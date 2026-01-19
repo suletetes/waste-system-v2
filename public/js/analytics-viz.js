@@ -1073,6 +1073,517 @@ class AnalyticsVisualization {
     });
   }
 
+  // Workflow visualization methods
+
+  /**
+   * Render status transition flow chart
+   * @param {Array} transitionStats - Status transition statistics
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderTransitionFlowChart(transitionStats, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      // Process transition data for sankey-style visualization using bar chart
+      const labels = transitionStats.map(stat => `${stat.fromStatus} → ${stat.toStatus}`);
+      const data = transitionStats.map(stat => stat.count);
+      const avgTimes = transitionStats.map(stat => stat.averageTime);
+
+      const chartData = {
+        labels,
+        datasets: [{
+          label: 'Transition Count',
+          data,
+          backgroundColor: transitionStats.map(stat => this.statusColors[stat.fromStatus] || this.defaultColors.primary),
+          borderColor: transitionStats.map(stat => this.statusColors[stat.fromStatus] || this.defaultColors.primary),
+          borderWidth: 1
+        }]
+      };
+
+      const config = {
+        type: 'bar',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          indexAxis: 'y',
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Status Transitions'
+            },
+            tooltip: {
+              callbacks: {
+                afterLabel: (context) => {
+                  const index = context.dataIndex;
+                  return `Average Time: ${avgTimes[index].toFixed(1)} hours`;
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Number of Transitions'
+              }
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderTransitionFlowChart:', error.message);
+      this.showChartError(containerId, 'Failed to load transition flow chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render common workflow paths chart
+   * @param {Array} commonPaths - Common workflow paths data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderCommonPathsChart(commonPaths, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      const labels = commonPaths.slice(0, 10).map(path => path.path.replace(' -> ', ' → '));
+      const data = commonPaths.slice(0, 10).map(path => path.count);
+      const percentages = commonPaths.slice(0, 10).map(path => path.percentage);
+
+      const chartData = {
+        labels,
+        datasets: [{
+          label: 'Path Frequency',
+          data,
+          backgroundColor: this.generateColorPalette(labels.length),
+          borderWidth: 1
+        }]
+      };
+
+      const config = {
+        type: 'doughnut',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Most Common Workflow Paths'
+            },
+            tooltip: {
+              callbacks: {
+                label: (context) => {
+                  const index = context.dataIndex;
+                  return `${context.label}: ${context.parsed} reports (${percentages[index]}%)`;
+                }
+              }
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderCommonPathsChart:', error.message);
+      this.showChartError(containerId, 'Failed to load workflow paths chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render status time analytics chart
+   * @param {Object} statusTimeData - Status time analytics data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderStatusTimeChart(statusTimeData, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      const statuses = Object.keys(statusTimeData);
+      const avgTimes = statuses.map(status => statusTimeData[status].averageTime);
+      const medianTimes = statuses.map(status => statusTimeData[status].medianTime);
+
+      const chartData = {
+        labels: statuses,
+        datasets: [
+          {
+            label: 'Average Time',
+            data: avgTimes,
+            backgroundColor: this.defaultColors.primary,
+            borderColor: this.defaultColors.primary,
+            borderWidth: 1
+          },
+          {
+            label: 'Median Time',
+            data: medianTimes,
+            backgroundColor: this.defaultColors.success,
+            borderColor: this.defaultColors.success,
+            borderWidth: 1
+          }
+        ]
+      };
+
+      const config = {
+        type: 'bar',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Time Spent in Each Status'
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              title: {
+                display: true,
+                text: 'Time (hours)'
+              }
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderStatusTimeChart:', error.message);
+      this.showChartError(containerId, 'Failed to load status time chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render workflow timeline chart
+   * @param {Array} timelineData - Timeline data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderTimelineChart(timelineData, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      const labels = timelineData.map(item => item.period);
+      const totalEvents = timelineData.map(item => item.totalEvents);
+      const avgDuration = timelineData.map(item => item.averageDuration);
+
+      const chartData = {
+        labels,
+        datasets: [
+          {
+            label: 'Total Events',
+            data: totalEvents,
+            backgroundColor: this.defaultColors.primary,
+            borderColor: this.defaultColors.primary,
+            borderWidth: 2,
+            fill: false,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Avg Duration (hours)',
+            data: avgDuration,
+            backgroundColor: this.defaultColors.warning,
+            borderColor: this.defaultColors.warning,
+            borderWidth: 2,
+            fill: false,
+            yAxisID: 'y1'
+          }
+        ]
+      };
+
+      const config = {
+        type: 'line',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Workflow Activity Timeline'
+            }
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Number of Events'
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Average Duration (hours)'
+              },
+              grid: {
+                drawOnChartArea: false,
+              },
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderTimelineChart:', error.message);
+      this.showChartError(containerId, 'Failed to load timeline chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render workflow efficiency metrics chart
+   * @param {Object} efficiencyData - Efficiency metrics data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderEfficiencyMetrics(efficiencyData, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      const categories = Object.keys(efficiencyData.categoryEfficiency || {});
+      const avgDurations = categories.map(cat => efficiencyData.categoryEfficiency[cat].averageDuration);
+      const completionRates = categories.map(cat => efficiencyData.categoryEfficiency[cat].completionRate);
+
+      const chartData = {
+        labels: categories.map(cat => this.formatCategoryName(cat)),
+        datasets: [
+          {
+            label: 'Avg Duration (hours)',
+            data: avgDurations,
+            backgroundColor: this.defaultColors.info,
+            borderColor: this.defaultColors.info,
+            borderWidth: 1,
+            yAxisID: 'y'
+          },
+          {
+            label: 'Completion Rate (%)',
+            data: completionRates,
+            backgroundColor: this.defaultColors.success,
+            borderColor: this.defaultColors.success,
+            borderWidth: 1,
+            yAxisID: 'y1'
+          }
+        ]
+      };
+
+      const config = {
+        type: 'bar',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Efficiency by Category'
+            }
+          },
+          scales: {
+            y: {
+              type: 'linear',
+              display: true,
+              position: 'left',
+              title: {
+                display: true,
+                text: 'Duration (hours)'
+              }
+            },
+            y1: {
+              type: 'linear',
+              display: true,
+              position: 'right',
+              title: {
+                display: true,
+                text: 'Completion Rate (%)'
+              },
+              grid: {
+                drawOnChartArea: false,
+              },
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderEfficiencyMetrics:', error.message);
+      this.showChartError(containerId, 'Failed to load efficiency metrics chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render workflow bottlenecks chart
+   * @param {Array} bottlenecks - Bottlenecks data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderBottlenecksChart(bottlenecks, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+
+      const labels = bottlenecks.map(b => b.status);
+      const severities = bottlenecks.map(b => b.severity);
+      const avgDurations = bottlenecks.map(b => b.metrics.averageDuration);
+
+      // Color based on severity
+      const colors = severities.map(severity => {
+        if (severity >= 70) return this.defaultColors.danger;
+        if (severity >= 40) return this.defaultColors.warning;
+        return this.defaultColors.info;
+      });
+
+      const chartData = {
+        labels,
+        datasets: [{
+          label: 'Severity Score',
+          data: severities,
+          backgroundColor: colors,
+          borderColor: colors,
+          borderWidth: 1
+        }]
+      };
+
+      const config = {
+        type: 'bar',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Bottleneck Severity by Status'
+            },
+            tooltip: {
+              callbacks: {
+                afterLabel: (context) => {
+                  const index = context.dataIndex;
+                  return `Avg Duration: ${avgDurations[index].toFixed(1)} hours`;
+                }
+              }
+            }
+          },
+          scales: {
+            y: {
+              beginAtZero: true,
+              max: 100,
+              title: {
+                display: true,
+                text: 'Severity Score (0-100)'
+              }
+            }
+          }
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderBottlenecksChart:', error.message);
+      this.showChartError(containerId, 'Failed to load bottlenecks chart');
+      return null;
+    }
+  }
+
+  /**
+   * Generate color palette for charts
+   * @param {Number} count - Number of colors needed
+   * @returns {Array} Array of color hex codes
+   */
+  generateColorPalette(count) {
+    const baseColors = [
+      this.defaultColors.primary,
+      this.defaultColors.success,
+      this.defaultColors.warning,
+      this.defaultColors.danger,
+      this.defaultColors.info,
+      this.defaultColors.secondary
+    ];
+
+    const colors = [];
+    for (let i = 0; i < count; i++) {
+      colors.push(baseColors[i % baseColors.length]);
+    }
+    return colors;
+  }
+
   // Utility methods
 
   /**

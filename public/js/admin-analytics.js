@@ -22,6 +22,9 @@ class AdminAnalyticsDashboard {
       heatmap: `${this.apiBase}/heatmap`,
       drivers: `${this.apiBase}/drivers`,
       status: `${this.apiBase}/status-distribution`,
+      statusTransitions: `${this.apiBase}/status-transitions`,
+      workflowTimeline: `${this.apiBase}/workflow-timeline`,
+      workflowBottlenecks: `${this.apiBase}/workflow-bottlenecks`,
       resolution: `${this.apiBase}/resolution-times`,
       exportCSV: `${this.apiBase}/export/csv`,
       exportPDF: `${this.apiBase}/export/pdf`,
@@ -397,6 +400,9 @@ class AdminAnalyticsDashboard {
         case 'status':
           await this.loadStatusData(activeFilters);
           break;
+        case 'workflow':
+          await this.loadWorkflowData(activeFilters);
+          break;
         default:
           throw new Error(`Unknown tab: ${tabName}`);
       }
@@ -578,6 +584,68 @@ class AdminAnalyticsDashboard {
     }
   }
 
+  /**
+   * Load workflow analytics data
+   * @param {Object} filters - Active filters
+   */
+  async loadWorkflowData(filters) {
+    try {
+      const cacheKey = `workflow_${this.generateCacheKey(filters)}`;
+      let cachedData = this.getCachedData(cacheKey);
+
+      if (!cachedData) {
+        const params = this.buildAPIParams(filters);
+        
+        // Load status transitions data
+        const transitionsPromise = this.makeAPICall(`${this.endpoints.statusTransitions}?${params}`);
+        
+        // Load workflow timeline data
+        const timelineParams = new URLSearchParams(params);
+        timelineParams.append('groupBy', 'day');
+        timelineParams.append('maxReports', '50');
+        const timelinePromise = this.makeAPICall(`${this.endpoints.workflowTimeline}?${timelineParams}`);
+        
+        // Load bottlenecks data
+        const bottlenecksPromise = this.makeAPICall(`${this.endpoints.workflowBottlenecks}?${params}`);
+
+        // Wait for all data to load
+        const [transitionsData, timelineData, bottlenecksData] = await Promise.all([
+          transitionsPromise,
+          timelinePromise,
+          bottlenecksPromise
+        ]);
+
+        cachedData = {
+          transitions: transitionsData.success ? transitionsData.data : null,
+          timeline: timelineData.success ? timelineData.data : null,
+          bottlenecks: bottlenecksData.success ? bottlenecksData.data : null
+        };
+
+        this.setCachedData(cacheKey, cachedData);
+      }
+
+      // Render workflow visualizations
+      if (cachedData.transitions) {
+        this.renderWorkflowTransitions(cachedData.transitions);
+      }
+      
+      if (cachedData.timeline) {
+        this.renderWorkflowTimeline(cachedData.timeline);
+      }
+      
+      if (cachedData.bottlenecks) {
+        this.renderWorkflowBottlenecks(cachedData.bottlenecks);
+      }
+
+      // Update workflow summary
+      this.updateWorkflowSummary(cachedData);
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - loadWorkflowData:', error.message);
+      throw error;
+    }
+  }
+
   // Visualization rendering methods
 
   /**
@@ -721,6 +789,102 @@ class AdminAnalyticsDashboard {
       
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - renderStatusVisualization:', error.message);
+    }
+  }
+
+  /**
+   * Render workflow transitions visualization
+   * @param {Object} data - Status transitions data
+   */
+  renderWorkflowTransitions(data) {
+    try {
+      // Render status transition flow chart
+      if (data.transitionAnalytics && data.transitionAnalytics.transitionStats) {
+        this.visualization.renderTransitionFlowChart(
+          data.transitionAnalytics.transitionStats, 
+          'workflow-transitions-chart',
+          { title: 'Status Transition Flow' }
+        );
+      }
+
+      // Render common paths chart
+      if (data.transitionAnalytics && data.transitionAnalytics.commonPaths) {
+        this.visualization.renderCommonPathsChart(
+          data.transitionAnalytics.commonPaths,
+          'workflow-paths-chart',
+          { title: 'Most Common Workflow Paths' }
+        );
+      }
+
+      // Render status time analytics
+      if (data.statusTimeAnalytics) {
+        this.visualization.renderStatusTimeChart(
+          data.statusTimeAnalytics,
+          'status-time-chart',
+          { title: 'Average Time in Each Status' }
+        );
+      }
+
+      console.log('[INFO] AdminAnalyticsDashboard - Workflow transitions visualization rendered');
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderWorkflowTransitions:', error.message);
+    }
+  }
+
+  /**
+   * Render workflow timeline visualization
+   * @param {Object} data - Timeline data
+   */
+  renderWorkflowTimeline(data) {
+    try {
+      // Render aggregated timeline
+      if (data.aggregatedTimeline) {
+        this.visualization.renderTimelineChart(
+          data.aggregatedTimeline,
+          'workflow-timeline-chart',
+          { title: 'Workflow Activity Timeline' }
+        );
+      }
+
+      // Render efficiency metrics
+      if (data.efficiencyMetrics) {
+        this.visualization.renderEfficiencyMetrics(
+          data.efficiencyMetrics,
+          'workflow-efficiency-chart',
+          { title: 'Workflow Efficiency Metrics' }
+        );
+      }
+
+      console.log('[INFO] AdminAnalyticsDashboard - Workflow timeline visualization rendered');
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderWorkflowTimeline:', error.message);
+    }
+  }
+
+  /**
+   * Render workflow bottlenecks visualization
+   * @param {Object} data - Bottlenecks data
+   */
+  renderWorkflowBottlenecks(data) {
+    try {
+      // Render bottlenecks chart
+      if (data.bottlenecks && data.bottlenecks.length > 0) {
+        this.visualization.renderBottlenecksChart(
+          data.bottlenecks,
+          'workflow-bottlenecks-chart',
+          { title: 'Workflow Bottlenecks Analysis' }
+        );
+      }
+
+      // Update bottlenecks list
+      this.updateBottlenecksList(data.bottlenecks);
+
+      console.log('[INFO] AdminAnalyticsDashboard - Workflow bottlenecks visualization rendered');
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderWorkflowBottlenecks:', error.message);
     }
   }
 
@@ -1001,6 +1165,128 @@ class AdminAnalyticsDashboard {
 
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - updateStatusSummary:', error.message);
+    }
+  }
+
+  /**
+   * Update workflow summary cards
+   * @param {Object} data - Workflow data
+   */
+  updateWorkflowSummary(data) {
+    try {
+      // Update workflow efficiency metrics
+      if (data.timeline && data.timeline.efficiencyMetrics) {
+        const efficiency = data.timeline.efficiencyMetrics;
+        
+        const elements = {
+          'workflow-efficiency': `${efficiency.efficiencyScore || 0}%`,
+          'workflow-avg-duration': `${(efficiency.averageWorkflowDuration || 0).toFixed(1)}h`,
+          'workflow-completion': `${efficiency.completionRate || 0}%`,
+          'workflow-total': efficiency.totalWorkflows || 0
+        };
+
+        Object.entries(elements).forEach(([id, value]) => {
+          const element = document.getElementById(id);
+          if (element) {
+            element.textContent = value;
+          }
+        });
+      }
+
+      // Update transition summary
+      if (data.transitions && data.transitions.transitionAnalytics) {
+        const transitions = data.transitions.transitionAnalytics;
+        
+        const transitionElements = {
+          'workflow-transitions': transitions.totalTransitions || 0,
+          'workflow-paths': transitions.commonPaths?.length || 0
+        };
+
+        Object.entries(transitionElements).forEach(([id, value]) => {
+          const element = document.getElementById(id);
+          if (element) {
+            element.textContent = value;
+          }
+        });
+      }
+
+      // Update bottlenecks summary
+      if (data.bottlenecks && data.bottlenecks.summary) {
+        const bottlenecks = data.bottlenecks.summary;
+        
+        const bottleneckElements = {
+          'workflow-bottlenecks': bottlenecks.totalBottlenecks || 0,
+          'workflow-high-severity': bottlenecks.highSeverity || 0
+        };
+
+        Object.entries(bottleneckElements).forEach(([id, value]) => {
+          const element = document.getElementById(id);
+          if (element) {
+            element.textContent = value;
+          }
+        });
+      }
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateWorkflowSummary:', error.message);
+    }
+  }
+
+  /**
+   * Update bottlenecks list display
+   * @param {Array} bottlenecks - Array of bottleneck data
+   */
+  updateBottlenecksList(bottlenecks) {
+    try {
+      const container = document.getElementById('workflow-bottlenecks-list');
+      if (!container) return;
+
+      if (!bottlenecks || bottlenecks.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 text-center py-4">No bottlenecks detected</div>';
+        return;
+      }
+
+      const bottleneckHTML = bottlenecks.map(bottleneck => {
+        const severityClass = bottleneck.severity >= 70 ? 'bg-red-100 text-red-800' :
+                             bottleneck.severity >= 40 ? 'bg-yellow-100 text-yellow-800' :
+                             'bg-green-100 text-green-800';
+
+        const recommendationsHTML = bottleneck.recommendations
+          .map(rec => `<li class="text-sm text-gray-600">• ${rec}</li>`)
+          .join('');
+
+        return `
+          <div class="bg-white rounded-lg border border-gray-200 p-4 mb-3">
+            <div class="flex items-center justify-between mb-2">
+              <h4 class="font-semibold text-gray-900">${bottleneck.status} Status</h4>
+              <span class="px-2 py-1 rounded-full text-xs font-medium ${severityClass}">
+                Severity: ${bottleneck.severity}
+              </span>
+            </div>
+            <div class="grid grid-cols-2 gap-4 mb-3">
+              <div>
+                <span class="text-sm text-gray-500">Average Duration:</span>
+                <span class="font-medium ml-2">${bottleneck.metrics.averageDuration.toFixed(1)}h</span>
+              </div>
+              <div>
+                <span class="text-sm text-gray-500">90th Percentile:</span>
+                <span class="font-medium ml-2">${bottleneck.metrics.percentile90.toFixed(1)}h</span>
+              </div>
+            </div>
+            <div class="mb-2">
+              <span class="text-sm text-gray-500">Recommendations:</span>
+              <ul class="mt-1">
+                ${recommendationsHTML}
+              </ul>
+            </div>
+          </div>
+        `;
+      }).join('');
+
+      container.innerHTML = bottleneckHTML;
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateBottlenecksList:', error.message);
     }
   }
 
