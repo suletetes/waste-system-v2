@@ -36,6 +36,7 @@
     "dev": "node --watch server.js",
     "serve": "node server.js",
     "test": "node scripts/test-connection.js",
+    "test:system": "node scripts/test-system.js",
     "test:geocoder": "node scripts/test-geocoder.js",
     "test:status": "node scripts/testStatusUpdate.js",
     "admin:create": "node scripts/createAdmin.js",
