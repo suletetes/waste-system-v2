@@ -35,6 +35,9 @@ class DataAggregationService {
         matchStage.status = filters.status;
       }
 
+      // Get raw records for data quality calculation
+      const rawRecords = await Report.find(matchStage);
+
       const pipeline = [
         { $match: matchStage },
         {
@@ -78,7 +81,7 @@ class DataAggregationService {
       ];
 
       const results = await Report.aggregate(pipeline);
-      return this.formatTrendResults(results);
+      return this.formatTrendResults(results, rawRecords);
 
     } catch (error) {
       console.error('[ERROR] DataAggregation - aggregateTrendsByCategory:', error.message);
@@ -501,13 +504,14 @@ class DataAggregationService {
   /**
    * Format trend aggregation results
    * @param {Array} results - Raw aggregation results
+   * @param {Array} rawRecords - Raw report records for data quality
    * @returns {Object} Formatted trend data
    */
-  formatTrendResults(results) {
+  formatTrendResults(results, rawRecords = []) {
     return {
       totalDays: results.length,
       totalIncidents: results.reduce((sum, day) => sum + day.totalCount, 0),
-      dailyData: results.map(day => ({
+      dailyTrends: results.map(day => ({
         date: day.date,
         total: day.totalCount,
         categories: day.categories.reduce((acc, cat) => {
@@ -520,7 +524,8 @@ class DataAggregationService {
           totals[cat.category] = (totals[cat.category] || 0) + cat.count;
         });
         return totals;
-      }, {})
+      }, {}),
+      rawRecords: rawRecords
     };
   }
 

@@ -946,8 +946,8 @@ class AnalyticsEngine {
         efficiencyMetrics,
         totalReports: filteredReports.length,
         timeRange: {
-          start: Math.min(...filteredReports.map(r => new Date(r.createdAt))).toISOString(),
-          end: Math.max(...filteredReports.map(r => new Date(r.updatedAt || r.createdAt))).toISOString()
+          start: new Date(Math.min(...filteredReports.map(r => new Date(r.createdAt)))).toISOString(),
+          end: new Date(Math.max(...filteredReports.map(r => new Date(r.updatedAt || r.createdAt)))).toISOString()
         }
       };
 
