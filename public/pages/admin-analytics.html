@@ -42,9 +42,14 @@
             animation: spin 2s linear infinite;
             margin: 20px auto;
         }
-        @keyframes spin {
-            0% { transform: rotate(0deg); }
-            100% { transform: rotate(360deg); }
+        .driver-view-section {
+            display: block;
+        }
+        .driver-view-section.hidden {
+            display: none;
+        }
+        .performance-bar {
+            transition: width 0.3s ease-in-out;
         }
     </style>
 </head>
@@ -313,12 +318,17 @@
         <div id="drivers-content" class="tab-content">
             <div class="bg-white shadow rounded-lg">
                 <div class="px-6 py-4 border-b border-gray-200 flex justify-between items-center">
-                    <h3 class="text-lg font-medium text-gray-900">Driver Performance</h3>
+                    <h3 class="text-lg font-medium text-gray-900">Driver Performance Analytics</h3>
                     <div class="flex space-x-2">
                         <select id="driver-period" class="border-gray-300 rounded-md shadow-sm text-sm">
                             <option value="7d">Last 7 Days</option>
                             <option value="30d" selected>Last 30 Days</option>
                             <option value="90d">Last 90 Days</option>
+                        </select>
+                        <select id="driver-view" class="border-gray-300 rounded-md shadow-sm text-sm">
+                            <option value="overview" selected>Overview</option>
+                            <option value="ranking">Performance Ranking</option>
+                            <option value="efficiency">Efficiency Matrix</option>
                         </select>
                         <button id="export-drivers-csv" class="inline-flex items-center px-3 py-2 border border-gray-300 shadow-sm text-sm leading-4 font-medium rounded-md text-gray-700 bg-white hover:bg-gray-50">
                             <span class="material-symbols-outlined mr-1">download</span>
@@ -327,25 +337,170 @@
                     </div>
                 </div>
                 <div class="px-6 py-4">
+                    <!-- Privacy Notice -->
+                    <div class="bg-blue-50 border border-blue-200 rounded-md p-4 mb-6">
+                        <div class="flex">
+                            <div class="flex-shrink-0">
+                                <span class="material-symbols-outlined text-blue-400">privacy_tip</span>
+                            </div>
+                            <div class="ml-3">
+                                <h3 class="text-sm font-medium text-blue-800">Privacy Protection</h3>
+                                <div class="mt-2 text-sm text-blue-700">
+                                    <p>Driver performance data is anonymized and displays only performance metrics. No personal information is shown to protect driver privacy.</p>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
                     <!-- System Averages -->
-                    <div class="grid grid-cols-1 md:grid-cols-3 gap-4 mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
                         <div class="bg-gray-50 rounded-lg p-4">
                             <p class="text-sm font-medium text-gray-500">Average Completion Rate</p>
                             <p class="text-2xl font-semibold text-gray-900" id="drivers-avg-completion">-</p>
+                            <p class="text-xs text-gray-600 mt-1" id="drivers-completion-trend">-</p>
                         </div>
                         <div class="bg-gray-50 rounded-lg p-4">
                             <p class="text-sm font-medium text-gray-500">Average Resolution Time</p>
                             <p class="text-2xl font-semibold text-gray-900" id="drivers-avg-time">-</p>
+                            <p class="text-xs text-gray-600 mt-1" id="drivers-time-trend">-</p>
                         </div>
                         <div class="bg-gray-50 rounded-lg p-4">
                             <p class="text-sm font-medium text-gray-500">Active Drivers</p>
                             <p class="text-2xl font-semibold text-gray-900" id="drivers-count">-</p>
+                            <p class="text-xs text-gray-600 mt-1" id="drivers-activity-trend">-</p>
+                        </div>
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <p class="text-sm font-medium text-gray-500">System Efficiency</p>
+                            <p class="text-2xl font-semibold text-gray-900" id="drivers-efficiency">-</p>
+                            <p class="text-xs text-gray-600 mt-1" id="drivers-efficiency-trend">-</p>
                         </div>
                     </div>
                     
-                    <!-- Chart -->
-                    <div class="chart-container">
-                        <canvas id="drivers-chart"></canvas>
+                    <!-- Performance Overview -->
+                    <div id="driver-overview-section" class="driver-view-section">
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6 mb-6">
+                            <!-- Main Performance Chart -->
+                            <div class="chart-container">
+                                <canvas id="drivers-chart"></canvas>
+                            </div>
+                            
+                            <!-- Performance Distribution -->
+                            <div class="chart-container">
+                                <canvas id="drivers-distribution-chart"></canvas>
+                            </div>
+                        </div>
+
+                        <!-- Performance Rankings Table -->
+                        <div class="bg-gray-50 rounded-lg p-4">
+                            <h4 class="text-lg font-medium text-gray-900 mb-4">Top Performers (Privacy Protected)</h4>
+                            <div class="overflow-x-auto">
+                                <table class="min-w-full divide-y divide-gray-200">
+                                    <thead class="bg-gray-50">
+                                        <tr>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Rank</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Driver ID</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Completion Rate</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Avg Resolution Time</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Efficiency Score</th>
+                                            <th class="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">Performance Trend</th>
+                                        </tr>
+                                    </thead>
+                                    <tbody id="drivers-ranking-table" class="bg-white divide-y divide-gray-200">
+                                        <!-- Dynamic content will be inserted here -->
+                                    </tbody>
+                                </table>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Performance Ranking Section -->
+                    <div id="driver-ranking-section" class="driver-view-section hidden">
+                        <div class="grid grid-cols-1 lg:grid-cols-2 gap-6">
+                            <!-- Radar Chart for Performance Metrics -->
+                            <div class="chart-container">
+                                <canvas id="drivers-radar-chart"></canvas>
+                            </div>
+                            
+                            <!-- Performance Comparison -->
+                            <div class="bg-gray-50 rounded-lg p-4">
+                                <h4 class="text-lg font-medium text-gray-900 mb-4">Performance Benchmarks</h4>
+                                <div class="space-y-4">
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm font-medium text-gray-700">Completion Rate</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-32 bg-gray-200 rounded-full h-2">
+                                                <div id="completion-rate-bar" class="bg-green-600 h-2 rounded-full" style="width: 0%"></div>
+                                            </div>
+                                            <span id="completion-rate-value" class="text-sm font-semibold text-gray-900">-</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm font-medium text-gray-700">Resolution Speed</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-32 bg-gray-200 rounded-full h-2">
+                                                <div id="resolution-speed-bar" class="bg-blue-600 h-2 rounded-full" style="width: 0%"></div>
+                                            </div>
+                                            <span id="resolution-speed-value" class="text-sm font-semibold text-gray-900">-</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm font-medium text-gray-700">Quality Score</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-32 bg-gray-200 rounded-full h-2">
+                                                <div id="quality-score-bar" class="bg-purple-600 h-2 rounded-full" style="width: 0%"></div>
+                                            </div>
+                                            <span id="quality-score-value" class="text-sm font-semibold text-gray-900">-</span>
+                                        </div>
+                                    </div>
+                                    <div class="flex justify-between items-center">
+                                        <span class="text-sm font-medium text-gray-700">Consistency</span>
+                                        <div class="flex items-center space-x-2">
+                                            <div class="w-32 bg-gray-200 rounded-full h-2">
+                                                <div id="consistency-bar" class="bg-orange-600 h-2 rounded-full" style="width: 0%"></div>
+                                            </div>
+                                            <span id="consistency-value" class="text-sm font-semibold text-gray-900">-</span>
+                                        </div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+
+                    <!-- Efficiency Matrix Section -->
+                    <div id="driver-efficiency-section" class="driver-view-section hidden">
+                        <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+                            <!-- Efficiency Scatter Plot -->
+                            <div class="lg:col-span-2 chart-container">
+                                <canvas id="drivers-efficiency-chart"></canvas>
+                            </div>
+                            
+                            <!-- Efficiency Insights -->
+                            <div class="bg-gray-50 rounded-lg p-4">
+                                <h4 class="text-lg font-medium text-gray-900 mb-4">Efficiency Insights</h4>
+                                <div class="space-y-4">
+                                    <div class="border-l-4 border-green-500 pl-4">
+                                        <h5 class="text-sm font-semibold text-green-800">High Performers</h5>
+                                        <p class="text-sm text-green-700" id="high-performers-count">- drivers</p>
+                                        <p class="text-xs text-green-600">Above average in both metrics</p>
+                                    </div>
+                                    <div class="border-l-4 border-yellow-500 pl-4">
+                                        <h5 class="text-sm font-semibold text-yellow-800">Developing</h5>
+                                        <p class="text-sm text-yellow-700" id="developing-performers-count">- drivers</p>
+                                        <p class="text-xs text-yellow-600">Room for improvement</p>
+                                    </div>
+                                    <div class="border-l-4 border-blue-500 pl-4">
+                                        <h5 class="text-sm font-semibold text-blue-800">Specialists</h5>
+                                        <p class="text-sm text-blue-700" id="specialist-performers-count">- drivers</p>
+                                        <p class="text-xs text-blue-600">Strong in specific areas</p>
+                                    </div>
+                                    <div class="border-l-4 border-red-500 pl-4">
+                                        <h5 class="text-sm font-semibold text-red-800">Needs Support</h5>
+                                        <p class="text-sm text-red-700" id="support-needed-count">- drivers</p>
+                                        <p class="text-xs text-red-600">May need additional training</p>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
                     </div>
                 </div>
             </div>

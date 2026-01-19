@@ -681,31 +681,325 @@ class AnalyticsVisualization {
       return { labels: [], datasets: [] };
     }
 
-    // Limit to top 10 drivers for readability
+    // Limit to top 10 drivers for readability and privacy
     const topDrivers = data.drivers.slice(0, 10);
     
-    const labels = topDrivers.map(driver => 
-      `Driver ${driver.driverId.substring(0, 8)}`
+    // Privacy-compliant labels - use anonymized identifiers
+    const labels = topDrivers.map((driver, index) => 
+      `Driver ${String.fromCharCode(65 + index)}`
     );
 
     const datasets = [
       {
         label: 'Completion Rate (%)',
-        data: topDrivers.map(driver => driver.completionRate || 0),
+        data: topDrivers.map(driver => Math.round((driver.completionRate || 0) * 10) / 10),
         backgroundColor: this.defaultColors.success + '80',
         borderColor: this.defaultColors.success,
-        borderWidth: 1
+        borderWidth: 1,
+        yAxisID: 'y'
       },
       {
         label: 'Average Resolution Time (hours)',
-        data: topDrivers.map(driver => driver.averageResolutionTime || 0),
+        data: topDrivers.map(driver => Math.round((driver.averageResolutionTime || 0) * 10) / 10),
         backgroundColor: this.defaultColors.info + '80',
         borderColor: this.defaultColors.info,
-        borderWidth: 1
+        borderWidth: 1,
+        yAxisID: 'y1'
       }
     ];
 
     return { labels, datasets };
+  }
+
+  /**
+   * Render driver performance ranking chart
+   * @param {Object} data - Driver ranking data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderDriverRankingChart(data, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+      
+      const chartData = this.processDriverRankingData(data);
+      
+      const config = {
+        type: 'radar',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Driver Performance Radar',
+              font: { size: 16, weight: 'bold' }
+            },
+            legend: {
+              display: true,
+              position: 'bottom'
+            },
+            tooltip: {
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              titleColor: '#fff',
+              bodyColor: '#fff',
+              callbacks: {
+                label: (context) => {
+                  const metric = context.label;
+                  const value = context.parsed.r;
+                  return `${metric}: ${value}%`;
+                }
+              }
+            }
+          },
+          scales: {
+            r: {
+              beginAtZero: true,
+              max: 100,
+              ticks: {
+                stepSize: 20
+              },
+              grid: {
+                color: 'rgba(0, 0, 0, 0.1)'
+              },
+              angleLines: {
+                color: 'rgba(0, 0, 0, 0.1)'
+              }
+            }
+          },
+          elements: {
+            line: {
+              borderWidth: 2
+            },
+            point: {
+              radius: 4,
+              hoverRadius: 6
+            }
+          },
+          ...options.chartOptions
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+
+      console.log(`[INFO] AnalyticsVisualization - Driver ranking chart rendered: ${containerId}`);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderDriverRankingChart:', error.message);
+      this.showChartError(containerId, 'Failed to render driver ranking chart');
+      return null;
+    }
+  }
+
+  /**
+   * Render driver efficiency comparison chart
+   * @param {Object} data - Driver efficiency data
+   * @param {String} containerId - Container element ID
+   * @param {Object} options - Chart options
+   * @returns {Object} Chart instance
+   */
+  renderDriverEfficiencyChart(data, containerId, options = {}) {
+    try {
+      const canvas = document.getElementById(containerId);
+      if (!canvas) {
+        throw new Error(`Canvas element not found: ${containerId}`);
+      }
+
+      this.destroyChart(containerId);
+      const ctx = canvas.getContext('2d');
+      
+      const chartData = this.processDriverEfficiencyData(data);
+      
+      const config = {
+        type: 'scatter',
+        data: chartData,
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: {
+            title: {
+              display: true,
+              text: options.title || 'Driver Efficiency Matrix',
+              font: { size: 16, weight: 'bold' }
+            },
+            legend: {
+              display: true,
+              position: 'bottom'
+            },
+            tooltip: {
+              backgroundColor: 'rgba(0, 0, 0, 0.8)',
+              titleColor: '#fff',
+              bodyColor: '#fff',
+              callbacks: {
+                title: () => 'Driver Performance',
+                label: (context) => {
+                  const point = context.parsed;
+                  return [
+                    `Completion Rate: ${point.x}%`,
+                    `Efficiency Score: ${point.y}%`
+                  ];
+                }
+              }
+            }
+          },
+          scales: {
+            x: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Completion Rate (%)'
+              },
+              min: 0,
+              max: 100,
+              grid: {
+                color: 'rgba(0, 0, 0, 0.1)'
+              }
+            },
+            y: {
+              display: true,
+              title: {
+                display: true,
+                text: 'Efficiency Score (%)'
+              },
+              min: 0,
+              max: 100,
+              grid: {
+                color: 'rgba(0, 0, 0, 0.1)'
+              }
+            }
+          },
+          elements: {
+            point: {
+              radius: 8,
+              hoverRadius: 12,
+              borderWidth: 2,
+              backgroundColor: this.defaultColors.primary + '80',
+              borderColor: this.defaultColors.primary
+            }
+          },
+          ...options.chartOptions
+        }
+      };
+
+      const chart = new Chart(ctx, config);
+      this.charts.set(containerId, chart);
+
+      console.log(`[INFO] AnalyticsVisualization - Driver efficiency chart rendered: ${containerId}`);
+      return chart;
+
+    } catch (error) {
+      console.error('[ERROR] AnalyticsVisualization - renderDriverEfficiencyChart:', error.message);
+      this.showChartError(containerId, 'Failed to render driver efficiency chart');
+      return null;
+    }
+  }
+
+  /**
+   * Process driver ranking data for radar chart
+   * @param {Object} data - Raw driver ranking data
+   * @returns {Object} Chart.js data structure
+   */
+  processDriverRankingData(data) {
+    if (!data || !data.targetDriver) {
+      return { labels: [], datasets: [] };
+    }
+
+    const metrics = [
+      'Completion Rate',
+      'Resolution Speed',
+      'Assignment Accuracy',
+      'Quality Score',
+      'Consistency'
+    ];
+
+    const targetDriver = data.targetDriver;
+    const systemAverage = data.systemAverages || {};
+
+    const datasets = [
+      {
+        label: 'Selected Driver',
+        data: [
+          targetDriver.completionRate || 0,
+          targetDriver.resolutionSpeedScore || 0,
+          targetDriver.assignmentAccuracy || 0,
+          targetDriver.qualityScore || 0,
+          targetDriver.consistencyScore || 0
+        ],
+        backgroundColor: this.defaultColors.primary + '20',
+        borderColor: this.defaultColors.primary,
+        borderWidth: 2
+      },
+      {
+        label: 'System Average',
+        data: [
+          systemAverage.completionRate || 0,
+          systemAverage.resolutionSpeedScore || 0,
+          systemAverage.assignmentAccuracy || 0,
+          systemAverage.qualityScore || 0,
+          systemAverage.consistencyScore || 0
+        ],
+        backgroundColor: this.defaultColors.secondary + '20',
+        borderColor: this.defaultColors.secondary,
+        borderWidth: 2
+      }
+    ];
+
+    return { labels: metrics, datasets };
+  }
+
+  /**
+   * Process driver efficiency data for scatter plot
+   * @param {Object} data - Raw driver efficiency data
+   * @returns {Object} Chart.js data structure
+   */
+  processDriverEfficiencyData(data) {
+    if (!data || !data.drivers) {
+      return { labels: [], datasets: [] };
+    }
+
+    // Privacy-compliant: only show performance metrics, no identifying information
+    const scatterData = data.drivers.map(driver => ({
+      x: Math.round((driver.completionRate || 0) * 10) / 10,
+      y: Math.round((driver.efficiencyScore || 0) * 10) / 10
+    }));
+
+    const datasets = [
+      {
+        label: 'Driver Performance',
+        data: scatterData,
+        backgroundColor: this.defaultColors.primary + '60',
+        borderColor: this.defaultColors.primary,
+        borderWidth: 2
+      }
+    ];
+
+    // Add quadrant lines for performance categories
+    if (data.systemAverages) {
+      const avgCompletion = data.systemAverages.completionRate || 50;
+      const avgEfficiency = data.systemAverages.efficiencyScore || 50;
+
+      datasets.push({
+        label: 'System Average',
+        data: [{ x: avgCompletion, y: avgEfficiency }],
+        backgroundColor: this.defaultColors.warning,
+        borderColor: this.defaultColors.warning,
+        borderWidth: 3,
+        pointRadius: 8,
+        pointHoverRadius: 10,
+        showLine: false
+      });
+    }
+
+    return { labels: [], datasets };
   }
 
   // Map helper methods

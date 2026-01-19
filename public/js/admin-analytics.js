@@ -140,6 +140,14 @@ class AdminAnalyticsDashboard {
         });
       }
 
+      // Driver view selector
+      const driverViewSelect = document.getElementById('driver-view');
+      if (driverViewSelect) {
+        driverViewSelect.addEventListener('change', (e) => {
+          this.handleDriverViewChange(e.target.value);
+        });
+      }
+
       // Window events
       window.addEventListener('beforeunload', () => this.cleanup());
       window.addEventListener('focus', () => this.handleWindowFocus());
@@ -462,11 +470,13 @@ class AdminAnalyticsDashboard {
   /**
    * Load drivers analytics data
    * @param {Object} filters - Active filters
+   * @param {String} view - Current driver view
    */
-  async loadDriversData(filters) {
+  async loadDriversData(filters, view = null) {
     try {
       const driverPeriod = document.getElementById('driver-period')?.value || '30d';
-      const cacheKey = `drivers_${this.generateCacheKey(filters)}_${driverPeriod}`;
+      const driverView = view || document.getElementById('driver-view')?.value || 'overview';
+      const cacheKey = `drivers_${this.generateCacheKey(filters)}_${driverPeriod}_${driverView}`;
       let data = this.getCachedData(cacheKey);
 
       if (!data) {
@@ -476,9 +486,16 @@ class AdminAnalyticsDashboard {
       }
 
       if (data.success) {
-        this.renderDriversVisualization(data.data);
+        this.renderDriversVisualization(data.data, driverView);
         this.updateDriversSummary(data.data);
         this.updateDataQuality(data.dataQuality);
+        
+        // Load additional data for specific views
+        if (driverView === 'ranking') {
+          await this.loadDriverRankingData(filters);
+        } else if (driverView === 'efficiency') {
+          await this.loadDriverEfficiencyData(filters);
+        }
       } else {
         throw new Error(data.message || 'Failed to load drivers data');
       }
@@ -486,6 +503,49 @@ class AdminAnalyticsDashboard {
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - loadDriversData:', error.message);
       throw error;
+    }
+  }
+
+  /**
+   * Load driver ranking data
+   * @param {Object} filters - Active filters
+   */
+  async loadDriverRankingData(filters) {
+    try {
+      // For privacy, we'll use aggregated ranking data instead of individual driver data
+      const driverPeriod = document.getElementById('driver-period')?.value || '30d';
+      const params = this.buildAPIParams(filters, { period: driverPeriod, view: 'ranking' });
+      
+      const rankingData = await this.makeAPICall(`${this.endpoints.drivers}?${params}`);
+      
+      if (rankingData.success) {
+        this.renderDriverRankingVisualization(rankingData.data);
+        this.updateDriverRankingMetrics(rankingData.data);
+      }
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - loadDriverRankingData:', error.message);
+    }
+  }
+
+  /**
+   * Load driver efficiency data
+   * @param {Object} filters - Active filters
+   */
+  async loadDriverEfficiencyData(filters) {
+    try {
+      const driverPeriod = document.getElementById('driver-period')?.value || '30d';
+      const params = this.buildAPIParams(filters, { period: driverPeriod, view: 'efficiency' });
+      
+      const efficiencyData = await this.makeAPICall(`${this.endpoints.drivers}?${params}`);
+      
+      if (efficiencyData.success) {
+        this.renderDriverEfficiencyVisualization(efficiencyData.data);
+        this.updateDriverEfficiencyInsights(efficiencyData.data);
+      }
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - loadDriverEfficiencyData:', error.message);
     }
   }
 
@@ -559,17 +619,87 @@ class AdminAnalyticsDashboard {
   /**
    * Render drivers visualization
    * @param {Object} data - Drivers data
+   * @param {String} view - Current view (overview/ranking/efficiency)
    */
-  renderDriversVisualization(data) {
+  renderDriversVisualization(data, view = 'overview') {
     try {
-      this.visualization.renderDriverPerformanceBar(data, 'drivers-chart', {
-        title: 'Driver Performance Comparison'
-      });
+      switch (view) {
+        case 'overview':
+          this.renderDriverOverviewVisualization(data);
+          break;
+        case 'ranking':
+          this.renderDriverRankingVisualization(data);
+          break;
+        case 'efficiency':
+          this.renderDriverEfficiencyVisualization(data);
+          break;
+        default:
+          this.renderDriverOverviewVisualization(data);
+      }
 
-      console.log('[INFO] AdminAnalyticsDashboard - Drivers visualization rendered');
+      console.log(`[INFO] AdminAnalyticsDashboard - Drivers visualization rendered (${view})`);
       
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - renderDriversVisualization:', error.message);
+    }
+  }
+
+  /**
+   * Render driver overview visualization
+   * @param {Object} data - Drivers data
+   */
+  renderDriverOverviewVisualization(data) {
+    try {
+      // Main performance chart
+      this.visualization.renderDriverPerformanceBar(data, 'drivers-chart', {
+        title: 'Driver Performance Comparison (Privacy Protected)',
+        horizontal: false
+      });
+
+      // Performance distribution chart
+      if (data.performanceDistribution) {
+        this.visualization.renderStatusPieChart(data.performanceDistribution, 'drivers-distribution-chart', {
+          title: 'Performance Distribution'
+        });
+      }
+
+      // Update ranking table
+      this.updateDriverRankingTable(data);
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderDriverOverviewVisualization:', error.message);
+    }
+  }
+
+  /**
+   * Render driver ranking visualization
+   * @param {Object} data - Drivers ranking data
+   */
+  renderDriverRankingVisualization(data) {
+    try {
+      // Radar chart for performance metrics
+      this.visualization.renderDriverRankingChart(data, 'drivers-radar-chart', {
+        title: 'Performance Metrics Comparison'
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderDriverRankingVisualization:', error.message);
+    }
+  }
+
+  /**
+   * Render driver efficiency visualization
+   * @param {Object} data - Drivers efficiency data
+   */
+  renderDriverEfficiencyVisualization(data) {
+    try {
+      // Efficiency scatter plot
+      this.visualization.renderDriverEfficiencyChart(data, 'drivers-efficiency-chart', {
+        title: 'Driver Efficiency Matrix (Anonymized)'
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - renderDriverEfficiencyVisualization:', error.message);
     }
   }
 
@@ -654,7 +784,8 @@ class AdminAnalyticsDashboard {
       const elements = {
         'drivers-avg-completion': `${(data.systemAverages?.completionRate || 0).toFixed(1)}%`,
         'drivers-avg-time': `${(data.systemAverages?.resolutionTime || 0).toFixed(1)}h`,
-        'drivers-count': data.activeDrivers || 0
+        'drivers-count': data.activeDrivers || 0,
+        'drivers-efficiency': `${(data.systemAverages?.efficiencyScore || 0).toFixed(1)}%`
       };
 
       Object.entries(elements).forEach(([id, value]) => {
@@ -664,9 +795,183 @@ class AdminAnalyticsDashboard {
         }
       });
 
+      // Update trend indicators
+      this.updateDriverTrends(data);
+
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - updateDriversSummary:', error.message);
     }
+  }
+
+  /**
+   * Update driver trend indicators
+   * @param {Object} data - Drivers data
+   */
+  updateDriverTrends(data) {
+    try {
+      const trends = data.trends || {};
+      
+      const trendElements = {
+        'drivers-completion-trend': this.formatTrend(trends.completionRate),
+        'drivers-time-trend': this.formatTrend(trends.resolutionTime, true), // Inverted for time (lower is better)
+        'drivers-activity-trend': this.formatTrend(trends.activeDrivers),
+        'drivers-efficiency-trend': this.formatTrend(trends.efficiencyScore)
+      };
+
+      Object.entries(trendElements).forEach(([id, trendText]) => {
+        const element = document.getElementById(id);
+        if (element) {
+          element.textContent = trendText;
+        }
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateDriverTrends:', error.message);
+    }
+  }
+
+  /**
+   * Update driver ranking table
+   * @param {Object} data - Drivers data
+   */
+  updateDriverRankingTable(data) {
+    try {
+      const tableBody = document.getElementById('drivers-ranking-table');
+      if (!tableBody || !data.drivers) return;
+
+      // Clear existing content
+      tableBody.innerHTML = '';
+
+      // Sort drivers by performance score and take top 10
+      const topDrivers = data.drivers
+        .sort((a, b) => (b.performanceScore || 0) - (a.performanceScore || 0))
+        .slice(0, 10);
+
+      topDrivers.forEach((driver, index) => {
+        const row = document.createElement('tr');
+        row.className = index % 2 === 0 ? 'bg-white' : 'bg-gray-50';
+        
+        // Privacy-compliant driver identifier
+        const driverLabel = `Driver ${String.fromCharCode(65 + index)}`;
+        
+        row.innerHTML = `
+          <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
+            ${index + 1}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+            ${driverLabel}
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+            <div class="flex items-center">
+              <div class="w-16 bg-gray-200 rounded-full h-2 mr-2">
+                <div class="bg-green-600 h-2 rounded-full" style="width: ${driver.completionRate || 0}%"></div>
+              </div>
+              ${(driver.completionRate || 0).toFixed(1)}%
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+            ${(driver.averageResolutionTime || 0).toFixed(1)}h
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
+            <div class="flex items-center">
+              <div class="w-16 bg-gray-200 rounded-full h-2 mr-2">
+                <div class="bg-blue-600 h-2 rounded-full" style="width: ${driver.efficiencyScore || 0}%"></div>
+              </div>
+              ${(driver.efficiencyScore || 0).toFixed(1)}%
+            </div>
+          </td>
+          <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
+            ${this.formatTrend(driver.performanceTrend)}
+          </td>
+        `;
+        
+        tableBody.appendChild(row);
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateDriverRankingTable:', error.message);
+    }
+  }
+
+  /**
+   * Update driver ranking metrics
+   * @param {Object} data - Driver ranking data
+   */
+  updateDriverRankingMetrics(data) {
+    try {
+      if (!data.systemAverages) return;
+
+      const metrics = {
+        'completion-rate': data.systemAverages.completionRate || 0,
+        'resolution-speed': data.systemAverages.resolutionSpeedScore || 0,
+        'quality-score': data.systemAverages.qualityScore || 0,
+        'consistency': data.systemAverages.consistencyScore || 0
+      };
+
+      Object.entries(metrics).forEach(([metric, value]) => {
+        const barElement = document.getElementById(`${metric}-bar`);
+        const valueElement = document.getElementById(`${metric}-value`);
+        
+        if (barElement) {
+          barElement.style.width = `${value}%`;
+        }
+        
+        if (valueElement) {
+          valueElement.textContent = `${value.toFixed(1)}%`;
+        }
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateDriverRankingMetrics:', error.message);
+    }
+  }
+
+  /**
+   * Update driver efficiency insights
+   * @param {Object} data - Driver efficiency data
+   */
+  updateDriverEfficiencyInsights(data) {
+    try {
+      if (!data.efficiencyInsights) return;
+
+      const insights = data.efficiencyInsights;
+      
+      const insightElements = {
+        'high-performers-count': `${insights.highPerformers || 0} drivers`,
+        'developing-performers-count': `${insights.developing || 0} drivers`,
+        'specialist-performers-count': `${insights.specialists || 0} drivers`,
+        'support-needed-count': `${insights.needsSupport || 0} drivers`
+      };
+
+      Object.entries(insightElements).forEach(([id, text]) => {
+        const element = document.getElementById(id);
+        if (element) {
+          element.textContent = text;
+        }
+      });
+
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - updateDriverEfficiencyInsights:', error.message);
+    }
+  }
+
+  /**
+   * Format trend value for display
+   * @param {Number} trend - Trend value
+   * @param {Boolean} inverted - Whether lower values are better
+   * @returns {String} Formatted trend text
+   */
+  formatTrend(trend, inverted = false) {
+    if (typeof trend !== 'number') return 'No data';
+    
+    const absValue = Math.abs(trend);
+    const isPositive = inverted ? trend < 0 : trend > 0;
+    const arrow = isPositive ? '↗' : '↘';
+    const color = isPositive ? 'text-green-600' : 'text-red-600';
+    
+    if (absValue < 0.1) return 'Stable';
+    
+    return `<span class="${color}">${arrow} ${absValue.toFixed(1)}%</span>`;
   }
 
   /**
@@ -780,6 +1085,28 @@ class AdminAnalyticsDashboard {
   }
 
   /**
+   * Handle driver view change
+   * @param {String} view - Selected view (overview/ranking/efficiency)
+   */
+  async handleDriverViewChange(view) {
+    try {
+      console.log(`[INFO] AdminAnalyticsDashboard - Driver view changed to: ${view}`);
+      
+      // Update view sections visibility
+      this.updateDriverViewSections(view);
+      
+      if (this.currentTab === 'drivers') {
+        // Reload drivers data with new view
+        await this.loadDriversData(this.filters.getActiveFilters(), view);
+      }
+      
+    } catch (error) {
+      console.error('[ERROR] AdminAnalyticsDashboard - handleDriverViewChange:', error.message);
+      this.showError('Failed to update driver view');
+    }
+  }
+
+  /**
    * Handle driver period change
    * @param {String} period - Selected period
    */
@@ -791,14 +1118,40 @@ class AdminAnalyticsDashboard {
         // Clear drivers cache
         this.clearCacheByPattern('drivers_');
         
+        // Get current view
+        const currentView = document.getElementById('driver-view')?.value || 'overview';
+        
         // Reload drivers data
-        await this.loadDriversData(this.filters.getActiveFilters());
+        await this.loadDriversData(this.filters.getActiveFilters(), currentView);
       }
       
     } catch (error) {
       console.error('[ERROR] AdminAnalyticsDashboard - handleDriverPeriodChange:', error.message);
       this.showError('Failed to update driver period');
     }
+  }
+
+  /**
+   * Update driver view sections visibility
+   * @param {String} activeView - Active view name
+   */
+  updateDriverViewSections(activeView) {
+    const sections = {
+      'overview': 'driver-overview-section',
+      'ranking': 'driver-ranking-section',
+      'efficiency': 'driver-efficiency-section'
+    };
+
+    Object.entries(sections).forEach(([view, sectionId]) => {
+      const section = document.getElementById(sectionId);
+      if (section) {
+        if (view === activeView) {
+          section.classList.remove('hidden');
+        } else {
+          section.classList.add('hidden');
+        }
+      }
+    });
   }
 
   /**
