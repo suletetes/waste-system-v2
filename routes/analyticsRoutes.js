@@ -6,6 +6,144 @@ import ExportService from '../services/exportService.js';
 import { authenticateToken, requireAdmin } from '../middleware/auth.js';
 import Report from '../models/report.js';
 
+/**
+ * Enhanced error handler middleware for analytics routes
+ * @param {Error} error - Error object
+ * @param {Object} req - Request object
+ * @param {Object} res - Response object
+ * @param {Function} next - Next middleware function
+ */
+const handleAnalyticsError = (error, req, res, next) => {
+  const timestamp = new Date().toISOString();
+  const requestId = req.headers['x-request-id'] || `req_${Date.now()}`;
+  
+  console.error(`[ERROR] Analytics API [${requestId}] ${req.method} ${req.path}:`, {
+    message: error.message,
+    stack: error.stack,
+    query: req.query,
+    body: req.body,
+    timestamp
+  });
+
+  // Determine error type and appropriate response
+  let statusCode = 500;
+  let errorCode = 'INTERNAL_SERVER_ERROR';
+  let userMessage = 'An internal server error occurred';
+
+  if (error.message.includes('timeout')) {
+    statusCode = 408;
+    errorCode = 'REQUEST_TIMEOUT';
+    userMessage = 'Request timed out. Please try with smaller date range or additional filters.';
+  } else if (error.message.includes('validation')) {
+    statusCode = 400;
+    errorCode = 'VALIDATION_ERROR';
+    userMessage = 'Invalid request parameters. Please check your input.';
+  } else if (error.message.includes('not found')) {
+    statusCode = 404;
+    errorCode = 'RESOURCE_NOT_FOUND';
+    userMessage = 'Requested resource not found.';
+  } else if (error.message.includes('unauthorized') || error.message.includes('permission')) {
+    statusCode = 403;
+    errorCode = 'ACCESS_DENIED';
+    userMessage = 'Access denied. Admin privileges required.';
+  } else if (error.message.includes('too large') || error.message.includes('BSONObj size')) {
+    statusCode = 413;
+    errorCode = 'PAYLOAD_TOO_LARGE';
+    userMessage = 'Result set too large. Please add filters or use pagination.';
+  }
+
+  res.status(statusCode).json({
+    success: false,
+    error: {
+      code: errorCode,
+      message: userMessage,
+      details: process.env.NODE_ENV === 'development' ? error.message : undefined,
+      requestId,
+      timestamp
+    }
+  });
+};
+
+/**
+ * Validate request parameters for analytics endpoints
+ * @param {Object} params - Parameters to validate
+ * @param {Array} required - Required parameter names
+ * @returns {Object} Validation result
+ */
+const validateRequestParams = (params, required = []) => {
+  const errors = [];
+  const warnings = [];
+
+  // Check required parameters
+  required.forEach(param => {
+    if (!params[param]) {
+      errors.push(`Missing required parameter: ${param}`);
+    }
+  });
+
+  // Validate date parameters
+  ['startDate', 'endDate', 'period1Start', 'period1End', 'period2Start', 'period2End'].forEach(dateParam => {
+    if (params[dateParam]) {
+      const date = new Date(params[dateParam]);
+      if (isNaN(date.getTime())) {
+        errors.push(`Invalid date format for ${dateParam}: ${params[dateParam]}`);
+      }
+    }
+  });
+
+  // Validate numeric parameters
+  ['page', 'limit', 'gridSize', 'maxReports'].forEach(numParam => {
+    if (params[numParam] !== undefined) {
+      const num = parseFloat(params[numParam]);
+      if (isNaN(num) || num < 0) {
+        errors.push(`Invalid numeric value for ${numParam}: ${params[numParam]}`);
+      }
+    }
+  });
+
+  // Validate enum parameters
+  const validCategories = ['all', 'recyclable', 'illegal_dumping', 'hazardous_waste'];
+  if (params.category && !validCategories.includes(params.category)) {
+    errors.push(`Invalid category: ${params.category}. Valid values: ${validCategories.join(', ')}`);
+  }
+
+  const validStatuses = ['all', 'Pending', 'Assigned', 'In Progress', 'Completed', 'Rejected'];
+  if (params.status && !validStatuses.includes(params.status)) {
+    errors.push(`Invalid status: ${params.status}. Valid values: ${validStatuses.join(', ')}`);
+  }
+
+  // Validate pagination limits
+  if (params.limit) {
+    const limit = parseInt(params.limit);
+    if (limit > 10000) {
+      warnings.push('Large limit value may impact performance. Consider using pagination.');
+    }
+  }
+
+  // Validate date ranges
+  if (params.startDate && params.endDate) {
+    const start = new Date(params.startDate);
+    const end = new Date(params.endDate);
+    
+    if (!isNaN(start.getTime()) && !isNaN(end.getTime())) {
+      if (start > end) {
+        errors.push('startDate cannot be after endDate');
+      }
+      
+      const daysDiff = Math.ceil((end - start) / (1000 * 60 * 60 * 24));
+      if (daysDiff > 365) {
+        warnings.push('Large date range may impact performance. Consider smaller ranges or pagination.');
+      }
+    }
+  }
+
+  return {
+    isValid: errors.length === 0,
+    errors,
+    warnings
+  };
+};
+
 const router = express.Router();
 
 // Initialize services
@@ -34,21 +172,33 @@ router.get('/trends', async (req, res) => {
       optimize = 'true'
     } = req.query;
 
-    // Validate required parameters
-    if (!startDate || !endDate) {
+    // Enhanced parameter validation
+    const validation = validateRequestParams(req.query, ['startDate', 'endDate']);
+    
+    if (!validation.isValid) {
       return res.status(400).json({
         success: false,
         error: {
-          code: 'INVALID_DATE_RANGE',
-          message: 'startDate and endDate are required',
+          code: 'VALIDATION_ERROR',
+          message: 'Invalid request parameters',
+          details: validation.errors,
+          warnings: validation.warnings,
           timestamp: new Date().toISOString()
         }
       });
     }
 
+    // Log warnings if any
+    if (validation.warnings.length > 0) {
+      console.warn('[WARN] Analytics API - /trends:', validation.warnings);
+    }
+
     const dateRange = { startDate: new Date(startDate), endDate: new Date(endDate) };
     const filters = { category, status };
-    const pagination = { page: parseInt(page), limit: parseInt(limit) };
+    const pagination = { 
+      page: Math.max(1, parseInt(page)), 
+      limit: Math.min(10000, Math.max(1, parseInt(limit))) // Enforce reasonable limits
+    };
 
     // Check cache first
     const cacheKey = cacheService.generateCacheKey('trends', { ...filters, ...pagination }, dateRange);
@@ -75,6 +225,9 @@ router.get('/trends', async (req, res) => {
       if (progressTracker) {
         progressTracker.updateProgress(2, 'Processing trend data');
       }
+
+      // Calculate data quality metrics
+      const dataQuality = await analyticsEngine.calculateDataQuality(trendData.rawRecords || []);
 
       // Apply pagination if requested
       let paginatedData = trendData;
@@ -104,6 +257,7 @@ router.get('/trends', async (req, res) => {
       result = {
         success: true,
         data: paginatedData,
+        dataQuality,
         performance: {
           datasetSize: sizeEstimate,
           processingTime: Date.now(),
@@ -118,26 +272,17 @@ router.get('/trends', async (req, res) => {
       // Cache the result
       await cacheService.cacheAnalyticsData(cacheKey, result);
     }
-      const dataQuality = await analyticsEngine.calculateDataQuality(trendData.rawRecords || []);
-      
-      result = {
-        ...trendData,
-        dataQuality
-      };
-      
-      // Cache the results
-      await cacheService.cacheAnalyticsData(cacheKey, result);
-    }
 
     res.json({
       success: true,
-      data: result,
+      data: result.data,
       dataQuality: result.dataQuality || {
         totalRecords: 0,
         validRecords: 0,
         excludedRecords: 0,
         qualityScore: 100,
-        exclusionReasons: {}
+        exclusionReasons: {},
+        recommendations: []
       },
       filters: { dateRange, category, status },
       cached: !!result,
@@ -151,7 +296,7 @@ router.get('/trends', async (req, res) => {
       error: {
         code: 'TREND_ANALYSIS_ERROR',
         message: 'Failed to generate trend analysis',
-        details: error.message,
+        details: process.env.NODE_ENV === 'development' ? error.message : 'Internal server error',
         timestamp: new Date().toISOString()
       }
     });

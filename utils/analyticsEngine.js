@@ -1231,54 +1231,163 @@ class AnalyticsEngine {
   }
 
   /**
-   * Validate report data for analytics processing
+   * Validate report data for analytics processing with comprehensive checks
    * @param {Object} report - Report object to validate
-   * @returns {Boolean} True if report is valid for analytics
+   * @returns {Object} Validation result with details
    */
   validateReportData(report) {
+    const validationResult = {
+      isValid: false,
+      errors: [],
+      warnings: []
+    };
+
     try {
-      // Check required fields
-      if (!report || !report._id || !report.createdAt || !report.category || !report.status) {
-        return false;
+      // Null/undefined check
+      if (!report) {
+        validationResult.errors.push('Report object is null or undefined');
+        return validationResult;
       }
 
-      // Validate category
-      if (!this.validCategories.includes(report.category)) {
-        return false;
+      // Required field validation with specific error messages
+      if (!report._id) {
+        validationResult.errors.push('Missing required field: _id');
       }
 
-      // Validate status
-      if (!this.validStatuses.includes(report.status)) {
-        return false;
+      if (!report.createdAt) {
+        validationResult.errors.push('Missing required field: createdAt');
       }
 
-      // Validate dates
-      const createdAt = new Date(report.createdAt);
-      if (isNaN(createdAt.getTime())) {
-        return false;
+      if (!report.category) {
+        validationResult.errors.push('Missing required field: category');
       }
 
-      return true;
+      if (!report.status) {
+        validationResult.errors.push('Missing required field: status');
+      }
+
+      // Category validation with case-insensitive check
+      if (report.category) {
+        const normalizedCategory = typeof report.category === 'string' ? report.category.toLowerCase() : '';
+        const validCategoriesLower = this.validCategories.map(c => c.toLowerCase());
+        
+        if (!validCategoriesLower.includes(normalizedCategory)) {
+          validationResult.errors.push(`Invalid category: ${report.category}. Valid categories: ${this.validCategories.join(', ')}`);
+        }
+      }
+
+      // Status validation with case-sensitive check
+      if (report.status && !this.validStatuses.includes(report.status)) {
+        validationResult.errors.push(`Invalid status: ${report.status}. Valid statuses: ${this.validStatuses.join(', ')}`);
+      }
+
+      // Date validation with detailed error reporting
+      if (report.createdAt) {
+        const createdAt = new Date(report.createdAt);
+        if (isNaN(createdAt.getTime())) {
+          validationResult.errors.push(`Invalid createdAt date format: ${report.createdAt}`);
+        } else {
+          // Check for reasonable date range (not in future, not too old)
+          const now = new Date();
+          const oneYearAgo = new Date(now.getFullYear() - 1, now.getMonth(), now.getDate());
+          
+          if (createdAt > now) {
+            validationResult.warnings.push('createdAt is in the future');
+          }
+          
+          if (createdAt < oneYearAgo) {
+            validationResult.warnings.push('createdAt is more than one year old');
+          }
+        }
+      }
+
+      // Optional field validation
+      if (report.updatedAt) {
+        const updatedAt = new Date(report.updatedAt);
+        if (isNaN(updatedAt.getTime())) {
+          validationResult.warnings.push(`Invalid updatedAt date format: ${report.updatedAt}`);
+        } else if (report.createdAt) {
+          const createdAt = new Date(report.createdAt);
+          if (!isNaN(createdAt.getTime()) && updatedAt < createdAt) {
+            validationResult.errors.push('updatedAt cannot be before createdAt');
+          }
+        }
+      }
+
+      // Coordinate validation if present
+      if (report.latitude !== undefined || report.longitude !== undefined) {
+        if (report.latitude === null || report.longitude === null) {
+          validationResult.warnings.push('Coordinates are null - geographic analysis will exclude this record');
+        } else if (!this.validateCoordinates(report.latitude, report.longitude)) {
+          validationResult.warnings.push(`Invalid coordinates: lat=${report.latitude}, lng=${report.longitude}`);
+        }
+      }
+
+      // Status history validation
+      if (report.statusHistory) {
+        if (!Array.isArray(report.statusHistory)) {
+          validationResult.warnings.push('statusHistory should be an array');
+        } else if (report.statusHistory.length === 0) {
+          validationResult.warnings.push('statusHistory is empty');
+        } else {
+          // Validate status history entries
+          report.statusHistory.forEach((entry, index) => {
+            if (!entry.status || !entry.timestamp) {
+              validationResult.warnings.push(`statusHistory[${index}] missing required fields`);
+            } else if (!this.validStatuses.includes(entry.status)) {
+              validationResult.warnings.push(`statusHistory[${index}] has invalid status: ${entry.status}`);
+            }
+          });
+        }
+      }
+
+      // Assigned driver validation
+      if (report.assignedDriver !== undefined && report.assignedDriver !== null) {
+        if (typeof report.assignedDriver !== 'string' && typeof report.assignedDriver !== 'object') {
+          validationResult.warnings.push('assignedDriver should be a string or ObjectId');
+        }
+      }
+
+      // Description validation
+      if (report.description !== undefined) {
+        if (typeof report.description !== 'string') {
+          validationResult.warnings.push('description should be a string');
+        } else if (report.description.length > 10000) {
+          validationResult.warnings.push('description is unusually long (>10000 characters)');
+        }
+      }
+
+      // Set validation result
+      validationResult.isValid = validationResult.errors.length === 0;
+
+      return validationResult;
+
     } catch (error) {
       console.error('[ERROR] Analytics Engine - validateReportData:', error.message);
-      return false;
+      validationResult.errors.push(`Validation error: ${error.message}`);
+      return validationResult;
     }
   }
 
   /**
-   * Calculate data quality metrics for a dataset
+   * Calculate data quality metrics for a dataset with comprehensive analysis
    * @param {Array} reports - Array of reports to analyze
-   * @returns {Object} Data quality metrics
+   * @returns {Object} Enhanced data quality metrics
    */
   async calculateDataQuality(reports) {
     try {
       if (!reports || !Array.isArray(reports)) {
+        console.warn('[WARN] Analytics Engine - calculateDataQuality: Invalid input - not an array');
         return {
           totalRecords: 0,
           validRecords: 0,
           excludedRecords: 0,
           qualityScore: 100,
-          exclusionReasons: {}
+          exclusionReasons: {},
+          validationDetails: {
+            errors: ['Input is not a valid array'],
+            warnings: []
+          }
         };
       }
 
@@ -1290,73 +1399,116 @@ class AnalyticsEngine {
         missingData: 0,
         duplicates: 0,
         invalidCategory: 0,
-        invalidStatus: 0
+        invalidStatus: 0,
+        validationErrors: 0
+      };
+
+      const validationDetails = {
+        errors: [],
+        warnings: [],
+        processedRecords: 0
       };
 
       const seenIds = new Set();
 
-      for (const report of reports) {
-        let isValid = true;
+      for (let i = 0; i < reports.length; i++) {
+        const report = reports[i];
+        validationDetails.processedRecords++;
         
-        // Check for duplicates
-        if (report._id && seenIds.has(report._id.toString())) {
-          exclusionReasons.duplicates++;
-          isValid = false;
-          continue;
-        }
-        if (report._id) {
-          seenIds.add(report._id.toString());
-        }
-
-        // Check required fields
-        if (!report._id || !report.createdAt || !report.category || !report.status) {
-          exclusionReasons.missingData++;
-          isValid = false;
-        }
-
-        // Validate dates
-        if (report.createdAt) {
-          const createdAt = new Date(report.createdAt);
-          if (isNaN(createdAt.getTime())) {
-            exclusionReasons.invalidDates++;
-            isValid = false;
+        try {
+          // Comprehensive validation
+          const validation = this.validateReportData(report);
+          
+          // Track validation errors and warnings
+          if (validation.errors.length > 0) {
+            validationDetails.errors.push(`Record ${i}: ${validation.errors.join(', ')}`);
+            exclusionReasons.validationErrors++;
+            continue; // Skip this record
           }
-        }
 
-        // Validate coordinates (if present)
-        if (report.latitude !== undefined || report.longitude !== undefined) {
-          if (!this.validateCoordinates(report.latitude, report.longitude)) {
+          if (validation.warnings.length > 0) {
+            validationDetails.warnings.push(`Record ${i}: ${validation.warnings.join(', ')}`);
+          }
+
+          // Check for duplicates
+          if (report._id) {
+            const idString = report._id.toString();
+            if (seenIds.has(idString)) {
+              exclusionReasons.duplicates++;
+              validationDetails.errors.push(`Record ${i}: Duplicate ID ${idString}`);
+              continue;
+            }
+            seenIds.add(idString);
+          }
+
+          // Additional specific checks for exclusion reasons
+          if (report.createdAt) {
+            const createdAt = new Date(report.createdAt);
+            if (isNaN(createdAt.getTime())) {
+              exclusionReasons.invalidDates++;
+              continue;
+            }
+          }
+
+          // Validate coordinates (if present) for geographic analysis
+          if ((report.latitude !== undefined || report.longitude !== undefined) && 
+              !this.validateCoordinates(report.latitude, report.longitude)) {
             exclusionReasons.invalidCoordinates++;
-            isValid = false;
+            // Don't exclude the record, just note the coordinate issue
           }
-        }
 
-        // Validate category
-        if (report.category && !this.validCategories.includes(report.category)) {
-          exclusionReasons.invalidCategory++;
-          isValid = false;
-        }
+          // Check for missing critical data
+          if (!report._id || !report.createdAt || !report.category || !report.status) {
+            exclusionReasons.missingData++;
+            continue;
+          }
 
-        // Validate status
-        if (report.status && !this.validStatuses.includes(report.status)) {
-          exclusionReasons.invalidStatus++;
-          isValid = false;
-        }
+          // Validate category
+          if (report.category && !this.validCategories.includes(report.category)) {
+            exclusionReasons.invalidCategory++;
+            continue;
+          }
 
-        if (isValid) {
+          // Validate status
+          if (report.status && !this.validStatuses.includes(report.status)) {
+            exclusionReasons.invalidStatus++;
+            continue;
+          }
+
+          // If we reach here, the record is valid
           validRecords++;
+
+        } catch (recordError) {
+          console.error(`[ERROR] Analytics Engine - Processing record ${i}:`, recordError.message);
+          exclusionReasons.validationErrors++;
+          validationDetails.errors.push(`Record ${i}: Processing error - ${recordError.message}`);
         }
       }
 
       const excludedRecords = totalRecords - validRecords;
       const qualityScore = totalRecords > 0 ? Math.round((validRecords / totalRecords) * 100) : 100;
 
+      // Log quality issues if significant
+      if (qualityScore < 90) {
+        console.warn(`[WARN] Analytics Engine - Data quality below 90%: ${qualityScore}% (${excludedRecords}/${totalRecords} excluded)`);
+      }
+
+      if (excludedRecords > 0) {
+        console.log(`[INFO] Analytics Engine - Data quality summary: ${validRecords}/${totalRecords} valid records (${qualityScore}%)`);
+      }
+
       return {
         totalRecords,
         validRecords,
         excludedRecords,
         qualityScore,
-        exclusionReasons
+        exclusionReasons,
+        validationDetails: {
+          ...validationDetails,
+          errorCount: validationDetails.errors.length,
+          warningCount: validationDetails.warnings.length
+        },
+        recommendations: this.generateDataQualityRecommendations(exclusionReasons, qualityScore)
       };
 
     } catch (error) {
@@ -1368,82 +1520,308 @@ class AnalyticsEngine {
         qualityScore: 0,
         exclusionReasons: {
           processingError: 1
+        },
+        validationDetails: {
+          errors: [`Critical processing error: ${error.message}`],
+          warnings: [],
+          errorCount: 1,
+          warningCount: 0
+        },
+        recommendations: ['Fix critical processing errors before proceeding with analysis']
+      };
+    }
+  }
+
+  /**
+   * Generate data quality improvement recommendations
+   * @param {Object} exclusionReasons - Reasons for data exclusion
+   * @param {Number} qualityScore - Overall quality score
+   * @returns {Array} Array of recommendations
+   */
+  generateDataQualityRecommendations(exclusionReasons, qualityScore) {
+    const recommendations = [];
+
+    try {
+      if (qualityScore < 50) {
+        recommendations.push('CRITICAL: Data quality is below 50%. Review data collection and validation processes.');
+      } else if (qualityScore < 80) {
+        recommendations.push('WARNING: Data quality is below 80%. Consider improving data validation.');
+      }
+
+      if (exclusionReasons.missingData > 0) {
+        recommendations.push(`${exclusionReasons.missingData} records missing required fields. Ensure all required fields are populated.`);
+      }
+
+      if (exclusionReasons.invalidDates > 0) {
+        recommendations.push(`${exclusionReasons.invalidDates} records have invalid dates. Verify date format consistency.`);
+      }
+
+      if (exclusionReasons.invalidCoordinates > 0) {
+        recommendations.push(`${exclusionReasons.invalidCoordinates} records have invalid coordinates. Check geocoding service.`);
+      }
+
+      if (exclusionReasons.duplicates > 0) {
+        recommendations.push(`${exclusionReasons.duplicates} duplicate records found. Implement deduplication process.`);
+      }
+
+      if (exclusionReasons.invalidCategory > 0) {
+        recommendations.push(`${exclusionReasons.invalidCategory} records have invalid categories. Standardize category values.`);
+      }
+
+      if (exclusionReasons.invalidStatus > 0) {
+        recommendations.push(`${exclusionReasons.invalidStatus} records have invalid status values. Ensure status consistency.`);
+      }
+
+      if (recommendations.length === 0) {
+        recommendations.push('Data quality is good. No immediate improvements needed.');
+      }
+
+      return recommendations;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - generateDataQualityRecommendations:', error.message);
+      return ['Error generating recommendations. Review data quality manually.'];
+    }
+  }
+
+  /**
+   * Exclude invalid records from dataset with detailed logging
+   * @param {Array} reports - Array of reports to filter
+   * @returns {Object} { validReports, excludedCount, dataQualityScore, exclusionDetails }
+   */
+  excludeInvalidRecords(reports) {
+    try {
+      if (!reports || !Array.isArray(reports)) {
+        console.error('[ERROR] Analytics Engine - excludeInvalidRecords: Input is not a valid array');
+        return {
+          validReports: [],
+          excludedCount: 0,
+          dataQualityScore: 0,
+          exclusionDetails: {
+            reason: 'Invalid input - not an array',
+            originalCount: 0
+          }
+        };
+      }
+
+      const originalCount = reports.length;
+      const validReports = [];
+      const excludedReports = [];
+
+      for (let i = 0; i < reports.length; i++) {
+        const report = reports[i];
+        
+        try {
+          const validation = this.validateReportData(report);
+          
+          if (validation.isValid) {
+            validReports.push(report);
+          } else {
+            excludedReports.push({
+              index: i,
+              report: report,
+              errors: validation.errors,
+              warnings: validation.warnings
+            });
+          }
+        } catch (validationError) {
+          console.error(`[ERROR] Analytics Engine - Validating record ${i}:`, validationError.message);
+          excludedReports.push({
+            index: i,
+            report: report,
+            errors: [`Validation failed: ${validationError.message}`],
+            warnings: []
+          });
+        }
+      }
+
+      const excludedCount = excludedReports.length;
+      const dataQualityScore = originalCount > 0 
+        ? Math.round((validReports.length / originalCount) * 100)
+        : 100;
+
+      // Log exclusion details if significant
+      if (excludedCount > 0) {
+        const exclusionRate = Math.round((excludedCount / originalCount) * 100);
+        
+        if (exclusionRate > 10) {
+          console.warn(`[WARN] Analytics Engine - High exclusion rate: ${exclusionRate}% (${excludedCount}/${originalCount} records excluded)`);
+          
+          // Log sample of exclusion reasons
+          const sampleExclusions = excludedReports.slice(0, 5);
+          sampleExclusions.forEach(excluded => {
+            console.warn(`[WARN] Sample exclusion - Record ${excluded.index}: ${excluded.errors.join(', ')}`);
+          });
+        } else {
+          console.log(`[INFO] Analytics Engine - Excluded ${excludedCount} invalid records from ${originalCount} total records (${exclusionRate}%)`);
+        }
+      }
+
+      return {
+        validReports,
+        excludedCount,
+        dataQualityScore,
+        exclusionDetails: {
+          originalCount,
+          validCount: validReports.length,
+          excludedCount,
+          exclusionRate: originalCount > 0 ? Math.round((excludedCount / originalCount) * 100) : 0,
+          sampleExclusions: excludedReports.slice(0, 10).map(e => ({
+            index: e.index,
+            errors: e.errors,
+            warnings: e.warnings
+          }))
+        }
+      };
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - excludeInvalidRecords:', error.message);
+      return {
+        validReports: [],
+        excludedCount: reports ? reports.length : 0,
+        dataQualityScore: 0,
+        exclusionDetails: {
+          reason: `Processing error: ${error.message}`,
+          originalCount: reports ? reports.length : 0
         }
       };
     }
   }
 
   /**
-   * Exclude invalid records from dataset
-   * @param {Array} reports - Array of reports to filter
-   * @returns {Object} { validReports, excludedCount, dataQualityScore }
-   */
-  excludeInvalidRecords(reports) {
-    try {
-      const validReports = reports.filter(report => this.validateReportData(report));
-      const excludedCount = reports.length - validReports.length;
-      const dataQualityScore = reports.length > 0 
-        ? Math.round((validReports.length / reports.length) * 100)
-        : 100;
-
-      if (excludedCount > 0) {
-        console.log(`[INFO] Analytics Engine - Excluded ${excludedCount} invalid records from ${reports.length} total records`);
-      }
-
-      return {
-        validReports,
-        excludedCount,
-        dataQualityScore
-      };
-    } catch (error) {
-      console.error('[ERROR] Analytics Engine - excludeInvalidRecords:', error.message);
-      return {
-        validReports: [],
-        excludedCount: reports.length,
-        dataQualityScore: 0
-      };
-    }
-  }
-
-  /**
-   * Calculate average of an array of numbers
+   * Calculate average of an array of numbers with null handling
    * @param {Array} values - Array of numeric values
    * @returns {Number} Average value
    */
   calculateAverage(values) {
-    if (!values || values.length === 0) return 0;
-    const sum = values.reduce((acc, val) => acc + val, 0);
-    return Math.round((sum / values.length) * 100) / 100;
-  }
+    try {
+      if (!values || !Array.isArray(values) || values.length === 0) {
+        return 0;
+      }
 
-  /**
-   * Calculate median of an array of numbers
-   * @param {Array} values - Sorted array of numeric values
-   * @returns {Number} Median value
-   */
-  calculateMedian(values) {
-    if (!values || values.length === 0) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    const middle = Math.floor(sorted.length / 2);
-    
-    if (sorted.length % 2 === 0) {
-      return Math.round(((sorted[middle - 1] + sorted[middle]) / 2) * 100) / 100;
-    } else {
-      return sorted[middle];
+      // Filter out null, undefined, NaN, and non-numeric values
+      const validValues = values.filter(val => 
+        val !== null && 
+        val !== undefined && 
+        typeof val === 'number' && 
+        !isNaN(val) && 
+        isFinite(val)
+      );
+
+      if (validValues.length === 0) {
+        return 0;
+      }
+
+      const sum = validValues.reduce((acc, val) => acc + val, 0);
+      const average = sum / validValues.length;
+
+      // Validate result
+      if (!isFinite(average) || isNaN(average)) {
+        console.warn('[WARN] Analytics Engine - calculateAverage: Result is not finite');
+        return 0;
+      }
+
+      return Math.round(average * 100) / 100;
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateAverage:', error.message);
+      return 0;
     }
   }
 
   /**
-   * Calculate percentile of an array of numbers
-   * @param {Array} values - Sorted array of numeric values
+   * Calculate median of an array of numbers with null handling
+   * @param {Array} values - Array of numeric values
+   * @returns {Number} Median value
+   */
+  calculateMedian(values) {
+    try {
+      if (!values || !Array.isArray(values) || values.length === 0) {
+        return 0;
+      }
+
+      // Filter out null, undefined, NaN, and non-numeric values
+      const validValues = values.filter(val => 
+        val !== null && 
+        val !== undefined && 
+        typeof val === 'number' && 
+        !isNaN(val) && 
+        isFinite(val)
+      );
+
+      if (validValues.length === 0) {
+        return 0;
+      }
+
+      const sorted = validValues.sort((a, b) => a - b);
+      const middle = Math.floor(sorted.length / 2);
+      
+      let median;
+      if (sorted.length % 2 === 0) {
+        median = (sorted[middle - 1] + sorted[middle]) / 2;
+      } else {
+        median = sorted[middle];
+      }
+
+      // Validate result
+      if (!isFinite(median) || isNaN(median)) {
+        console.warn('[WARN] Analytics Engine - calculateMedian: Result is not finite');
+        return 0;
+      }
+
+      return Math.round(median * 100) / 100;
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculateMedian:', error.message);
+      return 0;
+    }
+  }
+
+  /**
+   * Calculate percentile of an array of numbers with null handling
+   * @param {Array} values - Array of numeric values
    * @param {Number} percentile - Percentile to calculate (0-100)
    * @returns {Number} Percentile value
    */
   calculatePercentile(values, percentile) {
-    if (!values || values.length === 0) return 0;
-    const sorted = [...values].sort((a, b) => a - b);
-    const index = Math.ceil((percentile / 100) * sorted.length) - 1;
-    return sorted[Math.max(0, Math.min(index, sorted.length - 1))];
+    try {
+      if (!values || !Array.isArray(values) || values.length === 0) {
+        return 0;
+      }
+
+      // Validate percentile parameter
+      if (typeof percentile !== 'number' || isNaN(percentile) || percentile < 0 || percentile > 100) {
+        console.warn(`[WARN] Analytics Engine - calculatePercentile: Invalid percentile value: ${percentile}`);
+        return 0;
+      }
+
+      // Filter out null, undefined, NaN, and non-numeric values
+      const validValues = values.filter(val => 
+        val !== null && 
+        val !== undefined && 
+        typeof val === 'number' && 
+        !isNaN(val) && 
+        isFinite(val)
+      );
+
+      if (validValues.length === 0) {
+        return 0;
+      }
+
+      const sorted = validValues.sort((a, b) => a - b);
+      const index = Math.ceil((percentile / 100) * sorted.length) - 1;
+      const safeIndex = Math.max(0, Math.min(index, sorted.length - 1));
+      
+      const result = sorted[safeIndex];
+
+      // Validate result
+      if (!isFinite(result) || isNaN(result)) {
+        console.warn('[WARN] Analytics Engine - calculatePercentile: Result is not finite');
+        return 0;
+      }
+
+      return result;
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - calculatePercentile:', error.message);
+      return 0;
+    }
   }
 
   /**
@@ -2104,49 +2482,265 @@ class AnalyticsEngine {
   }
 
   /**
-   * Process trend data into formatted structure
+   * Validate mathematical correctness of calculation results
+   * @param {Object} results - Calculation results to validate
+   * @param {String} calculationType - Type of calculation performed
+   * @returns {Object} Validation result with corrections if needed
+   */
+  validateCalculationResults(results, calculationType) {
+    const validation = {
+      isValid: true,
+      errors: [],
+      warnings: [],
+      corrections: {},
+      originalResults: { ...results }
+    };
+
+    try {
+      switch (calculationType) {
+        case 'percentage':
+          this.validatePercentageResults(results, validation);
+          break;
+        case 'average':
+          this.validateAverageResults(results, validation);
+          break;
+        case 'rate':
+          this.validateRateResults(results, validation);
+          break;
+        case 'distribution':
+          this.validateDistributionResults(results, validation);
+          break;
+        case 'trend':
+          this.validateTrendResults(results, validation);
+          break;
+        default:
+          this.validateGenericResults(results, validation);
+      }
+
+      // Apply corrections if needed
+      if (Object.keys(validation.corrections).length > 0) {
+        Object.assign(results, validation.corrections);
+        validation.warnings.push('Mathematical corrections applied to ensure validity');
+      }
+
+      return validation;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - validateCalculationResults:', error.message);
+      validation.isValid = false;
+      validation.errors.push(`Validation error: ${error.message}`);
+      return validation;
+    }
+  }
+
+  /**
+   * Validate percentage calculation results
+   * @param {Object} results - Results containing percentage values
+   * @param {Object} validation - Validation object to update
+   */
+  validatePercentageResults(results, validation) {
+    Object.entries(results).forEach(([key, value]) => {
+      if (key.toLowerCase().includes('percentage') || key.toLowerCase().includes('rate')) {
+        if (typeof value === 'number') {
+          // Check for invalid percentage values
+          if (isNaN(value) || !isFinite(value)) {
+            validation.errors.push(`Invalid percentage value for ${key}: ${value}`);
+            validation.corrections[key] = 0;
+          } else if (value < 0) {
+            validation.warnings.push(`Negative percentage for ${key}: ${value}%`);
+            validation.corrections[key] = 0;
+          } else if (value > 100 && !key.toLowerCase().includes('change')) {
+            validation.warnings.push(`Percentage over 100% for ${key}: ${value}%`);
+            // Don't auto-correct as this might be valid in some contexts
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Validate average calculation results
+   * @param {Object} results - Results containing average values
+   * @param {Object} validation - Validation object to update
+   */
+  validateAverageResults(results, validation) {
+    Object.entries(results).forEach(([key, value]) => {
+      if (key.toLowerCase().includes('average') || key.toLowerCase().includes('mean')) {
+        if (typeof value === 'number') {
+          if (isNaN(value) || !isFinite(value)) {
+            validation.errors.push(`Invalid average value for ${key}: ${value}`);
+            validation.corrections[key] = 0;
+          } else if (value < 0 && !key.toLowerCase().includes('change')) {
+            validation.warnings.push(`Negative average for ${key}: ${value}`);
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Validate rate calculation results
+   * @param {Object} results - Results containing rate values
+   * @param {Object} validation - Validation object to update
+   */
+  validateRateResults(results, validation) {
+    // Check completion rates, rejection rates, etc.
+    ['completionRate', 'rejectionRate', 'assignmentAccuracy'].forEach(rateKey => {
+      if (results[rateKey] !== undefined) {
+        const value = results[rateKey];
+        if (typeof value === 'number') {
+          if (isNaN(value) || !isFinite(value)) {
+            validation.errors.push(`Invalid rate value for ${rateKey}: ${value}`);
+            validation.corrections[rateKey] = 0;
+          } else if (value < 0 || value > 100) {
+            validation.warnings.push(`Rate out of valid range (0-100) for ${rateKey}: ${value}%`);
+            validation.corrections[rateKey] = Math.max(0, Math.min(100, value));
+          }
+        }
+      }
+    });
+  }
+
+  /**
+   * Validate distribution calculation results
+   * @param {Object} results - Results containing distribution data
+   * @param {Object} validation - Validation object to update
+   */
+  validateDistributionResults(results, validation) {
+    if (results.statusDistribution && Array.isArray(results.statusDistribution)) {
+      let totalPercentage = 0;
+      
+      results.statusDistribution.forEach((item, index) => {
+        if (item.percentage !== undefined) {
+          if (isNaN(item.percentage) || !isFinite(item.percentage)) {
+            validation.errors.push(`Invalid percentage in distribution item ${index}: ${item.percentage}`);
+          } else {
+            totalPercentage += item.percentage;
+          }
+        }
+      });
+
+      // Check if percentages sum to approximately 100%
+      if (Math.abs(totalPercentage - 100) > 1) {
+        validation.warnings.push(`Distribution percentages sum to ${totalPercentage}% instead of 100%`);
+      }
+    }
+  }
+
+  /**
+   * Validate trend calculation results
+   * @param {Object} results - Results containing trend data
+   * @param {Object} validation - Validation object to update
+   */
+  validateTrendResults(results, validation) {
+    if (results.dailyTrends && Array.isArray(results.dailyTrends)) {
+      results.dailyTrends.forEach((day, index) => {
+        if (day.total !== undefined) {
+          if (isNaN(day.total) || !isFinite(day.total) || day.total < 0) {
+            validation.errors.push(`Invalid total count for day ${index}: ${day.total}`);
+          }
+        }
+
+        // Validate category totals sum to daily total
+        if (day.categories && day.total !== undefined) {
+          const categorySum = Object.values(day.categories).reduce((sum, count) => sum + (count || 0), 0);
+          if (Math.abs(categorySum - day.total) > 0) {
+            validation.warnings.push(`Category sum (${categorySum}) doesn't match total (${day.total}) for day ${index}`);
+          }
+        }
+      });
+    }
+  }
+
+  /**
+   * Process trend data into formatted structure with validation
    * @param {Array} trendData - Raw aggregated trend data
    * @param {Object} dateRange - Date range for analysis
    * @returns {Object} Processed trend data
    */
   processTrendData(trendData, dateRange) {
-    const processedData = {
-      dateRange,
-      totalIncidents: 0,
-      categoryBreakdown: {},
-      dailyTrends: []
-    };
+    try {
+      const processedData = {
+        dateRange,
+        totalIncidents: 0,
+        categoryBreakdown: {},
+        dailyTrends: []
+      };
 
-    // Initialize category breakdown
-    this.validCategories.forEach(category => {
-      processedData.categoryBreakdown[category] = 0;
-    });
+      // Initialize category breakdown
+      this.validCategories.forEach(category => {
+        processedData.categoryBreakdown[category] = 0;
+      });
 
-    // Process daily trends
-    const dailyMap = new Map();
-    
-    trendData.forEach(item => {
-      const date = item._id.date;
-      const category = item._id.category;
-      const count = item.count;
-
-      processedData.totalIncidents += count;
-      processedData.categoryBreakdown[category] = (processedData.categoryBreakdown[category] || 0) + count;
-
-      if (!dailyMap.has(date)) {
-        dailyMap.set(date, { date, total: 0, categories: {} });
+      // Validate input data
+      if (!Array.isArray(trendData)) {
+        console.warn('[WARN] Analytics Engine - processTrendData: trendData is not an array');
+        return processedData;
       }
 
-      const dayData = dailyMap.get(date);
-      dayData.total += count;
-      dayData.categories[category] = count;
-    });
+      // Process daily trends with null handling
+      const dailyMap = new Map();
+      
+      trendData.forEach((item, index) => {
+        try {
+          // Validate item structure
+          if (!item || !item._id || typeof item.count !== 'number') {
+            console.warn(`[WARN] Analytics Engine - Invalid trend item at index ${index}:`, item);
+            return;
+          }
 
-    processedData.dailyTrends = Array.from(dailyMap.values()).sort((a, b) => 
-      new Date(a.date) - new Date(b.date)
-    );
+          const date = item._id.date;
+          const category = item._id.category;
+          const count = Math.max(0, item.count); // Ensure non-negative
 
-    return processedData;
+          // Validate date and category
+          if (!date || !category || !this.validCategories.includes(category)) {
+            console.warn(`[WARN] Analytics Engine - Invalid date/category at index ${index}: date=${date}, category=${category}`);
+            return;
+          }
+
+          processedData.totalIncidents += count;
+          processedData.categoryBreakdown[category] = (processedData.categoryBreakdown[category] || 0) + count;
+
+          if (!dailyMap.has(date)) {
+            dailyMap.set(date, { date, total: 0, categories: {} });
+          }
+
+          const dayData = dailyMap.get(date);
+          dayData.total += count;
+          dayData.categories[category] = count;
+
+        } catch (itemError) {
+          console.error(`[ERROR] Analytics Engine - Processing trend item ${index}:`, itemError.message);
+        }
+      });
+
+      processedData.dailyTrends = Array.from(dailyMap.values()).sort((a, b) => 
+        new Date(a.date) - new Date(b.date)
+      );
+
+      // Validate mathematical correctness
+      const validation = this.validateCalculationResults(processedData, 'trend');
+      if (!validation.isValid) {
+        console.error('[ERROR] Analytics Engine - Trend data validation failed:', validation.errors);
+      }
+
+      if (validation.warnings.length > 0) {
+        console.warn('[WARN] Analytics Engine - Trend data warnings:', validation.warnings);
+      }
+
+      return processedData;
+
+    } catch (error) {
+      console.error('[ERROR] Analytics Engine - processTrendData:', error.message);
+      return {
+        dateRange,
+        totalIncidents: 0,
+        categoryBreakdown: {},
+        dailyTrends: [],
+        error: 'Processing failed'
+      };
+    }
   }
 }
 

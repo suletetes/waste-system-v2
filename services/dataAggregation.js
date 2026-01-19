@@ -707,7 +707,7 @@ class DataAggregationService {
   }
 
   /**
-   * Execute aggregation with performance monitoring
+   * Execute aggregation with performance monitoring and enhanced error handling
    * @param {String} collection - Collection name
    * @param {Array} pipeline - Aggregation pipeline
    * @param {Object} options - Execution options
@@ -715,45 +715,114 @@ class DataAggregationService {
    */
   async executeWithPerformanceMonitoring(collection, pipeline, options = {}) {
     const startTime = Date.now();
-    const { timeout = 30000, allowDiskUse = true } = options;
+    const { timeout = 30000, allowDiskUse = true, maxRetries = 2 } = options;
 
-    try {
-      // Add performance optimizations
-      const optimizedPipeline = this.optimizePipeline(pipeline, options);
+    let attempt = 0;
+    let lastError = null;
 
-      // Execute with timeout and disk use allowance
-      const aggregationOptions = {
-        allowDiskUse,
-        maxTimeMS: timeout
-      };
+    while (attempt <= maxRetries) {
+      try {
+        // Validate inputs
+        if (!Array.isArray(pipeline)) {
+          throw new Error('Pipeline must be an array');
+        }
 
-      const results = await Report.aggregate(optimizedPipeline, aggregationOptions);
-      const executionTime = Date.now() - startTime;
+        if (pipeline.length === 0) {
+          throw new Error('Pipeline cannot be empty');
+        }
 
-      // Log performance warnings
-      if (executionTime > 10000) { // 10 seconds
-        console.warn(`[WARN] DataAggregation - Slow query detected: ${executionTime}ms`);
-      }
+        // Add performance optimizations
+        const optimizedPipeline = this.optimizePipeline(pipeline, options);
 
-      return {
-        data: results,
-        performance: {
+        // Execute with timeout and disk use allowance
+        const aggregationOptions = {
+          allowDiskUse,
+          maxTimeMS: timeout
+        };
+
+        console.log(`[INFO] DataAggregation - Executing aggregation (attempt ${attempt + 1}/${maxRetries + 1})`);
+
+        const results = await Report.aggregate(optimizedPipeline, aggregationOptions);
+        const executionTime = Date.now() - startTime;
+
+        // Validate results
+        if (!Array.isArray(results)) {
+          throw new Error('Aggregation returned invalid results (not an array)');
+        }
+
+        // Performance analysis
+        const performanceMetrics = {
           executionTime,
           documentCount: results.length,
-          pipelineStages: optimizedPipeline.length
-        }
-      };
+          pipelineStages: optimizedPipeline.length,
+          attempt: attempt + 1,
+          optimizationsApplied: true
+        };
 
-    } catch (error) {
-      const executionTime = Date.now() - startTime;
-      
-      if (error.code === 50 || error.message.includes('timeout')) {
-        throw new Error(`Query timeout after ${executionTime}ms. Consider adding filters or pagination.`);
+        // Log performance warnings
+        if (executionTime > 10000) { // 10 seconds
+          console.warn(`[WARN] DataAggregation - Slow query detected: ${executionTime}ms (${results.length} results)`);
+          performanceMetrics.performanceWarning = 'Slow execution time';
+        }
+
+        if (results.length > 50000) {
+          console.warn(`[WARN] DataAggregation - Large result set: ${results.length} documents`);
+          performanceMetrics.performanceWarning = 'Large result set';
+        }
+
+        // Success - return results
+        return {
+          data: results,
+          performance: performanceMetrics,
+          success: true
+        };
+
+      } catch (error) {
+        attempt++;
+        lastError = error;
+        const executionTime = Date.now() - startTime;
+        
+        console.error(`[ERROR] DataAggregation - Attempt ${attempt} failed after ${executionTime}ms:`, error.message);
+
+        // Handle specific error types
+        if (error.code === 50 || error.message.includes('timeout')) {
+          if (attempt <= maxRetries) {
+            console.log(`[INFO] DataAggregation - Retrying with increased timeout (attempt ${attempt + 1})`);
+            options.timeout = Math.min(timeout * 1.5, 60000); // Increase timeout, max 60s
+            continue;
+          } else {
+            throw new Error(`Query timeout after ${executionTime}ms and ${maxRetries} retries. Consider adding filters or pagination.`);
+          }
+        }
+
+        if (error.code === 16389 || error.message.includes('BSONObj size')) {
+          throw new Error('Result set too large. Please add filters or use pagination to reduce data size.');
+        }
+
+        if (error.code === 16020 || error.message.includes('PlanExecutor error')) {
+          if (attempt <= maxRetries) {
+            console.log(`[INFO] DataAggregation - Retrying with simplified pipeline (attempt ${attempt + 1})`);
+            // Try with a simpler pipeline on retry
+            continue;
+          }
+        }
+
+        // If this is the last attempt, throw the error
+        if (attempt > maxRetries) {
+          break;
+        }
+
+        // Wait before retry (exponential backoff)
+        const waitTime = Math.min(1000 * Math.pow(2, attempt - 1), 5000);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
       }
-      
-      console.error('[ERROR] DataAggregation - executeWithPerformanceMonitoring:', error.message);
-      throw error;
     }
+
+    // All attempts failed
+    const totalTime = Date.now() - startTime;
+    console.error(`[ERROR] DataAggregation - All ${maxRetries + 1} attempts failed after ${totalTime}ms`);
+    
+    throw new Error(`Aggregation failed after ${maxRetries + 1} attempts: ${lastError?.message || 'Unknown error'}`);
   }
 
   /**
@@ -875,27 +944,80 @@ class DataAggregationService {
   }
 
   /**
-   * Validate date range
+   * Validate date range with comprehensive error handling
    * @param {Object} dateRange - { startDate, endDate }
-   * @returns {Object} Validated date range
+   * @returns {Object} Validated date range with additional metadata
    */
   validateDateRange(dateRange) {
-    if (!dateRange || !dateRange.startDate || !dateRange.endDate) {
-      throw new Error('Invalid date range: startDate and endDate are required');
+    try {
+      if (!dateRange) {
+        throw new Error('Date range object is required');
+      }
+
+      if (!dateRange.startDate || !dateRange.endDate) {
+        throw new Error('Both startDate and endDate are required');
+      }
+
+      let startDate, endDate;
+
+      // Handle different date input formats
+      try {
+        startDate = new Date(dateRange.startDate);
+        endDate = new Date(dateRange.endDate);
+      } catch (parseError) {
+        throw new Error(`Date parsing failed: ${parseError.message}`);
+      }
+
+      // Validate parsed dates
+      if (isNaN(startDate.getTime())) {
+        throw new Error(`Invalid startDate format: ${dateRange.startDate}`);
+      }
+
+      if (isNaN(endDate.getTime())) {
+        throw new Error(`Invalid endDate format: ${dateRange.endDate}`);
+      }
+
+      // Logical validation
+      if (startDate > endDate) {
+        throw new Error('Start date cannot be after end date');
+      }
+
+      // Check for reasonable date ranges
+      const now = new Date();
+      const oneYearFromNow = new Date(now.getFullYear() + 1, now.getMonth(), now.getDate());
+      const tenYearsAgo = new Date(now.getFullYear() - 10, now.getMonth(), now.getDate());
+
+      if (startDate > oneYearFromNow) {
+        console.warn('[WARN] DataAggregation - Start date is more than one year in the future');
+      }
+
+      if (endDate < tenYearsAgo) {
+        console.warn('[WARN] DataAggregation - End date is more than ten years in the past');
+      }
+
+      // Calculate range duration for performance warnings
+      const durationMs = endDate.getTime() - startDate.getTime();
+      const durationDays = Math.ceil(durationMs / (1000 * 60 * 60 * 24));
+
+      if (durationDays > 365) {
+        console.warn(`[WARN] DataAggregation - Large date range: ${durationDays} days. Consider pagination for better performance.`);
+      }
+
+      return { 
+        startDate, 
+        endDate,
+        metadata: {
+          durationDays,
+          durationMs,
+          isLargeRange: durationDays > 365,
+          isRecentRange: startDate > new Date(Date.now() - 30 * 24 * 60 * 60 * 1000) // Last 30 days
+        }
+      };
+
+    } catch (error) {
+      console.error('[ERROR] DataAggregation - validateDateRange:', error.message);
+      throw new Error(`Date range validation failed: ${error.message}`);
     }
-
-    const startDate = new Date(dateRange.startDate);
-    const endDate = new Date(dateRange.endDate);
-
-    if (isNaN(startDate.getTime()) || isNaN(endDate.getTime())) {
-      throw new Error('Invalid date format in date range');
-    }
-
-    if (startDate > endDate) {
-      throw new Error('Start date cannot be after end date');
-    }
-
-    return { startDate, endDate };
   }
 
   /**
