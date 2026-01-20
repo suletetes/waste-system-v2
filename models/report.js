@@ -70,8 +70,8 @@ reportSchema.pre('save', function(next) {
     // Clear temporary fields
     this.modifiedBy = undefined;
     this.statusChangeNotes = undefined;
-  } else if (this.isNew) {
-    // Initialize status history for new reports
+  } else if (this.isNew && (!this.statusHistory || this.statusHistory.length === 0)) {
+    // Initialize status history for new reports only if not already set
     this.statusHistory = [{
       status: this.status || 'Pending',
       timestamp: this.createdAt || new Date(),

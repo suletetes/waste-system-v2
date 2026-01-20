@@ -187,9 +187,23 @@ class AdminAnalyticsDashboard {
    */
   async checkAuthentication() {
     try {
-      const token = localStorage.getItem('token');
+      // Check for admin token first, then fallback to regular token
+      const token = localStorage.getItem('adminToken') || localStorage.getItem('userToken') || localStorage.getItem('token');
+      
       if (!token) {
         throw new Error('No authentication token found');
+      }
+
+      // Check if user is admin
+      let user = {};
+      try {
+        user = JSON.parse(localStorage.getItem('adminUser') || localStorage.getItem('user') || '{}');
+      } catch (parseError) {
+        console.warn('[WARN] AdminAnalyticsDashboard - Error parsing user data:', parseError);
+      }
+
+      if (!user.role || user.role !== 'admin') {
+        throw new Error('Admin access required');
       }
 
       // Verify token with a simple API call
@@ -205,7 +219,10 @@ class AdminAnalyticsDashboard {
         throw new Error('Authentication verification failed');
       }
 
-      console.log('[INFO] AdminAnalyticsDashboard - Authentication verified');
+      console.log('[INFO] AdminAnalyticsDashboard - Authentication verified for admin:', user.fullname || 'Unknown');
+      
+      // Store token for API calls
+      this.authToken = token;
       
       // Check system health
       await this.checkSystemHealth(response);
@@ -967,11 +984,15 @@ class AdminAnalyticsDashboard {
    */
   updateDriversSummary(data) {
     try {
+      // The API returns data in data.summary and data.benchmarks, not data.systemAverages
+      const summary = data.summary || {};
+      const benchmarks = data.benchmarks || {};
+      
       const elements = {
-        'drivers-avg-completion': `${(data.systemAverages?.completionRate || 0).toFixed(1)}%`,
-        'drivers-avg-time': `${(data.systemAverages?.resolutionTime || 0).toFixed(1)}h`,
-        'drivers-count': data.activeDrivers || 0,
-        'drivers-efficiency': `${(data.systemAverages?.efficiencyScore || 0).toFixed(1)}%`
+        'drivers-avg-completion': `${(summary.averageCompletionRate || 0).toFixed(1)}%`,
+        'drivers-avg-time': `${(summary.averageResolutionTime || 0).toFixed(1)}h`,
+        'drivers-count': data.driverCount || 0,
+        'drivers-efficiency': `${(benchmarks.productivity?.average || 0).toFixed(1)}%`
       };
 
       Object.entries(elements).forEach(([id, value]) => {
@@ -1023,14 +1044,14 @@ class AdminAnalyticsDashboard {
   updateDriverRankingTable(data) {
     try {
       const tableBody = document.getElementById('drivers-ranking-table');
-      if (!tableBody || !data.drivers) return;
+      if (!tableBody || !data.metrics) return;
 
       // Clear existing content
       tableBody.innerHTML = '';
 
-      // Sort drivers by performance score and take top 10
-      const topDrivers = data.drivers
-        .sort((a, b) => (b.performanceScore || 0) - (a.performanceScore || 0))
+      // Sort drivers by completion rate and take top 10
+      const topDrivers = data.metrics
+        .sort((a, b) => (b.completionRate || 0) - (a.completionRate || 0))
         .slice(0, 10);
 
       topDrivers.forEach((driver, index) => {
@@ -1039,6 +1060,9 @@ class AdminAnalyticsDashboard {
         
         // Privacy-compliant driver identifier
         const driverLabel = `Driver ${String.fromCharCode(65 + index)}`;
+        
+        // Calculate efficiency score from productivity score
+        const efficiencyScore = driver.productivityScore || 0;
         
         row.innerHTML = `
           <td class="px-6 py-4 whitespace-nowrap text-sm font-medium text-gray-900">
@@ -1061,13 +1085,13 @@ class AdminAnalyticsDashboard {
           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-900">
             <div class="flex items-center">
               <div class="w-16 bg-gray-200 rounded-full h-2 mr-2">
-                <div class="bg-blue-600 h-2 rounded-full" style="width: ${driver.efficiencyScore || 0}%"></div>
+                <div class="bg-blue-600 h-2 rounded-full" style="width: ${efficiencyScore}%"></div>
               </div>
-              ${(driver.efficiencyScore || 0).toFixed(1)}%
+              ${efficiencyScore.toFixed(1)}%
             </div>
           </td>
           <td class="px-6 py-4 whitespace-nowrap text-sm text-gray-500">
-            ${this.formatTrend(driver.performanceTrend)}
+            ${this.formatTrend(driver.performanceTrend || 'stable')}
           </td>
         `;
         
@@ -1166,15 +1190,23 @@ class AdminAnalyticsDashboard {
    */
   updateStatusSummary(data) {
     try {
-      const completionRate = data.completionRate || 0;
-      const rejectionRate = data.rejectionRate || 0;
-      const inProgressCount = data.statusCounts?.['In Progress'] || 0;
-      const avgResolutionTime = data.averageResolutionTime || 0;
+      // The API returns data in data.summary, not directly in data
+      const summary = data.summary || {};
+      const completionRate = summary.completionRate || 0;
+      const rejectionRate = summary.rejectionRate || 0;
+      const inProgressRate = summary.inProgressRate || 0;
+      
+      // Calculate average resolution time from status distribution
+      let avgResolutionTime = 0;
+      if (data.statusDistribution && data.statusDistribution.length > 0) {
+        const completedStatus = data.statusDistribution.find(s => s.status === 'Completed');
+        avgResolutionTime = completedStatus ? completedStatus.averageResolutionTime : 0;
+      }
 
       const elements = {
         'status-completion': `${completionRate.toFixed(1)}%`,
         'status-rejection': `${rejectionRate.toFixed(1)}%`,
-        'status-progress': inProgressCount,
+        'status-progress': inProgressRate,
         'status-avg-time': `${avgResolutionTime.toFixed(1)}h`
       };
 
@@ -1708,10 +1740,13 @@ class AdminAnalyticsDashboard {
    * @returns {Object} API response
    */
   async makeAPICall(url, options = {}) {
+    // Use same token retrieval logic as authentication
+    const token = localStorage.getItem('adminToken') || localStorage.getItem('userToken') || localStorage.getItem('token');
+    
     const defaultOptions = {
       method: 'GET',
       headers: {
-        'Authorization': `Bearer ${localStorage.getItem('token')}`,
+        'Authorization': `Bearer ${token}`,
         'Content-Type': 'application/json'
       }
     };

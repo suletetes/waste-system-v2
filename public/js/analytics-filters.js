@@ -74,12 +74,13 @@ class AnalyticsFilters {
   }
 
   /**
-   * Set default date range (last 30 days)
+   * Set default date range (last 30 days, ending tomorrow to include today's data)
    */
   setDefaultDateRange() {
     const endDate = new Date();
+    endDate.setDate(endDate.getDate() + 1); // Set to tomorrow to include today's data
     const startDate = new Date();
-    startDate.setDate(endDate.getDate() - this.defaultDateRange);
+    startDate.setDate(endDate.getDate() - this.defaultDateRange - 1); // Adjust for the extra day
 
     this.startDateInput.value = this.formatDateForInput(startDate);
     this.endDateInput.value = this.formatDateForInput(endDate);
@@ -289,8 +290,9 @@ class AnalyticsFilters {
   setQuickDateRange(days) {
     try {
       const endDate = new Date();
+      endDate.setDate(endDate.getDate() + 1); // Set to tomorrow to include today's data
       const startDate = new Date();
-      startDate.setDate(endDate.getDate() - days);
+      startDate.setDate(endDate.getDate() - days - 1); // Adjust for the extra day
 
       this.startDateInput.value = this.formatDateForInput(startDate);
       this.endDateInput.value = this.formatDateForInput(endDate);
