@@ -103,4 +103,3 @@ async function testWorkflowEndpoints() {
 
 // Run the test
 testWorkflowEndpoints();
-
